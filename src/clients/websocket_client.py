@@ -144,7 +144,17 @@ class WebSocketClient:
 
     async def _handle_event(self, event: dict) -> None:
         """Handle incoming WebSocket event"""
-        event_type = event.get("event")
+        # Handle nested event structure from eufy-security-ws
+        # Expected format: {"type": "event", "event": {"event": "motion detected", ...}}
+        if event.get("type") == "event" and isinstance(event.get("event"), dict):
+            inner_event = event["event"]
+            event_type = inner_event.get("event")
+            # Use the inner event dict for handlers (contains serialNumber, state, etc.)
+            event_data = inner_event
+        else:
+            # Fallback to flat structure for backward compatibility
+            event_type = event.get("event")
+            event_data = event
 
         if not event_type:
             logger.debug(f"Received event without type: {event}")
@@ -156,9 +166,9 @@ class WebSocketClient:
         if handler:
             try:
                 if asyncio.iscoroutinefunction(handler):
-                    await handler(event)
+                    await handler(event_data)
                 else:
-                    handler(event)
+                    handler(event_data)
             except Exception as e:
                 logger.error(
                     f"Error in event handler for {event_type}: {e}", exc_info=True

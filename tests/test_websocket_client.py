@@ -210,6 +210,41 @@ async def test_handle_event_with_handler(ws_client):
 
 
 @pytest.mark.asyncio
+async def test_handle_event_nested_structure(ws_client):
+    """Test handling event with nested eufy-security-ws structure"""
+    handler_called = False
+    received_event = None
+
+    async def handler(event):
+        nonlocal handler_called, received_event
+        handler_called = True
+        received_event = event
+
+    ws_client.on("motion detected", handler)
+
+    # Nested structure from eufy-security-ws
+    event = {
+        "type": "event",
+        "event": {
+            "source": "device",
+            "event": "motion detected",
+            "serialNumber": "T8B0051123360409",
+            "state": True
+        }
+    }
+    await ws_client._handle_event(event)
+
+    assert handler_called
+    # Handler should receive the inner event dict
+    assert received_event == {
+        "source": "device",
+        "event": "motion detected",
+        "serialNumber": "T8B0051123360409",
+        "state": True
+    }
+
+
+@pytest.mark.asyncio
 async def test_handle_event_without_handler(ws_client):
     """Test handling event without registered handler (should not crash)"""
     event = {"event": "unknown_event", "data": "test"}
