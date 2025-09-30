@@ -113,15 +113,20 @@ class WebSocketClient:
     async def start_listening(self) -> None:
         """Start listening for WebSocket events"""
         self._running = True
+        logger.info("🎧 Starting WebSocket listener loop")
 
         while self._running:
             try:
                 if not self.ws:
+                    logger.info("WebSocket not connected, attempting connection...")
                     await self.connect()
 
+                logger.info("📡 Listening for WebSocket messages...")
                 async for message in self.ws:
+                    logger.info(f"📨 Raw WebSocket message received: {message[:200]}...")
                     try:
                         event = json.loads(message)
+                        logger.info(f"📦 Parsed event: {event.get('event', 'unknown')} - {event}")
                         await self._handle_event(event)
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse WebSocket message: {e}")
