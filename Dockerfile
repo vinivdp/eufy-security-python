@@ -24,14 +24,10 @@ RUN curl -sSL https://install.python-poetry.org | python3 -
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml ./
-
-# Create minimal poetry.lock if it doesn't exist
-RUN touch poetry.lock
+COPY pyproject.toml poetry.lock ./
 
 # Install dependencies (without dev dependencies)
-RUN poetry install --no-root --only main --no-ansi || \
-    (poetry lock --no-update && poetry install --no-root --only main --no-ansi)
+RUN poetry install --no-root --only main --no-ansi
 
 # ============================================
 # Stage 2: Runtime - Lean production image
