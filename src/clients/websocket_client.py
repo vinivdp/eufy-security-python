@@ -53,6 +53,8 @@ class WebSocketClient:
     @retry_async(max_attempts=3, delay=2.0, backoff=2.0)
     async def _connect_with_retry(self) -> None:
         """Internal connection method with retry"""
+        import uuid
+
         logger.info(f"Connecting to eufy-security-ws at {self.url}")
         self.ws = await websockets.connect(
             self.url,
@@ -60,6 +62,15 @@ class WebSocketClient:
             ping_timeout=self.heartbeat_interval * 2,
         )
         logger.info("✅ WebSocket connected to eufy-security-ws")
+
+        # Send start_listening command to begin receiving events
+        message_id = str(uuid.uuid4())
+        start_command = {
+            "messageId": message_id,
+            "command": "start_listening"
+        }
+        await self.ws.send(json.dumps(start_command))
+        logger.info("📡 Sent start_listening command to eufy-security-ws")
 
     async def disconnect(self) -> None:
         """Disconnect from WebSocket server"""
