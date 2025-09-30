@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: eufy-security-python
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter  # $7/month minimum
+
+    envVars:
+      - key: WORKATO_WEBHOOK_URL
+        sync: false  # User sets in Render dashboard
+      - key: EUFY_USERNAME
+        sync: false
+      - key: EUFY_PASSWORD
+        sync: false
+      - key: EUFY_WS_URL
+        value: ws://127.0.0.1:3000/ws
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+    disk:
+      name: recordings
+      mountPath: /mnt/recordings
+      sizeGB: 150  # 150GB for 90-day retention (2 cameras)
+
+    healthCheckPath: /health
+
+    autoDeploy: true
+
+    buildFilter:
+      paths:
+        - src/**
+        - config/**
+        - pyproject.toml
+        - Dockerfile

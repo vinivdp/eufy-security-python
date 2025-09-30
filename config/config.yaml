@@ -1,0 +1,49 @@
+server:
+  host: "0.0.0.0"
+  port: 10000
+  public_url: "${RENDER_EXTERNAL_URL:http://localhost:10000}"
+
+eufy:
+  websocket_url: "${EUFY_WS_URL:ws://127.0.0.1:3000/ws}"
+  reconnect_delay: 5.0
+  heartbeat_interval: 30.0
+
+recording:
+  max_duration_seconds: 900  # 15 minutes
+  motion_timeout_seconds: 60  # Stop recording if no motion for 60s
+  snooze_duration_seconds: 3600  # 1 hour snooze after max duration
+  storage_path: "${STORAGE_PATH:./recordings}"
+  retention_days: 90
+  video_codec: "libx264"
+  video_quality: "medium"  # low, medium, high
+
+workato:
+  webhook_url: "${WORKATO_WEBHOOK_URL}"
+  timeout_seconds: 30
+  rate_limit_per_second: 20
+
+retry:
+  max_attempts: 3
+  initial_delay: 1.0
+  backoff_multiplier: 2.0
+
+error_logging:
+  send_to_workato: true
+  keep_in_memory: 100
+
+storage:
+  cleanup_schedule: "0 3 * * *"  # Daily at 3 AM
+  min_free_space_gb: 5
+
+alerts:
+  battery:
+    cooldown_hours: 24
+  offline:
+    debounce_seconds: 30
+
+logging:
+  level: "${LOG_LEVEL:INFO}"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "./logs/eufy-security.log"
+  max_size_mb: 100
+  backup_count: 5

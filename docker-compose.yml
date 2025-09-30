@@ -1,0 +1,56 @@
+version: '3.9'
+
+services:
+  eufy-security-ws:
+    image: bropat/eufy-security-ws:latest
+    container_name: eufy-security-ws
+    ports:
+      - "3000:3000"
+    volumes:
+      - eufy-config:/config
+    environment:
+      - USERNAME=${EUFY_USERNAME}
+      - PASSWORD=${EUFY_PASSWORD}
+    restart: unless-stopped
+    networks:
+      - eufy-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  eufy-python:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eufy-python
+    ports:
+      - "10000:10000"
+    volumes:
+      - ./recordings:/mnt/recordings
+      - ./logs:/app/logs
+      - ./config:/app/config
+    environment:
+      - WORKATO_WEBHOOK_URL=${WORKATO_WEBHOOK_URL}
+      - EUFY_WS_URL=ws://eufy-security-ws:3000/ws
+      - RENDER_EXTERNAL_URL=${RENDER_EXTERNAL_URL:-http://localhost:10000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - eufy-security-ws
+    restart: unless-stopped
+    networks:
+      - eufy-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  eufy-network:
+    driver: bridge
+
+volumes:
+  eufy-config:
