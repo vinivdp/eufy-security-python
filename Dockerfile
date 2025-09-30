@@ -1,45 +1,21 @@
-# ============================================
-# Stage 1: Builder - Install dependencies
-# ============================================
-FROM python:3.11-slim as builder
+# Simple single-stage Dockerfile
+FROM python:3.11-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PORT=10000
+
+# Install system dependencies including ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Poetry
-ENV POETRY_VERSION=1.7.1
-ENV POETRY_HOME=/opt/poetry
-ENV POETRY_NO_INTERACTION=1
-ENV POETRY_VIRTUALENVS_IN_PROJECT=1
-ENV POETRY_VIRTUALENVS_CREATE=1
-ENV PATH="$POETRY_HOME/bin:$PATH"
-
-RUN curl -sSL https://install.python-poetry.org | python3 -
-
-# Set working directory
-WORKDIR /app
-
-# Copy dependency files
-COPY pyproject.toml poetry.lock ./
-
-# Install dependencies (without dev dependencies)
-RUN poetry install --no-root --only main --no-ansi
-
-# ============================================
-# Stage 2: Runtime - Lean production image
-# ============================================
-FROM python:3.11-slim as runtime
-
-# Install ffmpeg for video processing
-RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for security
+# Create non-root user
 RUN useradd -m -u 1000 eufy && \
     mkdir -p /app /mnt/recordings /app/logs && \
     chown -R eufy:eufy /app /mnt/recordings
@@ -47,18 +23,19 @@ RUN useradd -m -u 1000 eufy && \
 # Set working directory
 WORKDIR /app
 
-# Copy virtual environment from builder
-COPY --from=builder --chown=eufy:eufy /app/.venv /app/.venv
+# Install Poetry
+RUN pip install --no-cache-dir poetry==1.7.1
+
+# Copy dependency files
+COPY pyproject.toml poetry.lock ./
+
+# Install dependencies globally (no venv)
+RUN poetry config virtualenvs.create false && \
+    poetry install --no-root --only main --no-interaction --no-ansi
 
 # Copy application code
-COPY --chown=eufy:eufy src/ /app/src/
-COPY --chown=eufy:eufy config/ /app/config/
-
-# Set environment variables
-ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app"
-ENV PYTHONUNBUFFERED=1
-ENV PORT=10000
+COPY --chown=eufy:eufy src/ ./src/
+COPY --chown=eufy:eufy config/ ./config/
 
 # Switch to non-root user
 USER eufy
@@ -68,7 +45,7 @@ EXPOSE 10000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/health').read()" || exit 1
 
 # Run the application
 CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "10000"]
