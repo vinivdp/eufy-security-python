@@ -23,7 +23,6 @@ MANIFEST
 .venv/
 venv/
 ENV/
-poetry.lock
 
 # Testing
 .pytest_cache/
