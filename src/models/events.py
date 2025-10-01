@@ -16,16 +16,12 @@ class MotionDetectedEvent(BaseEvent):
     """Motion detected event"""
     event: Literal["motion_detected"] = "motion_detected"
     device_sn: str
-    video_url: str
-    video_status: Literal["recording"] = "recording"
 
 
 class MotionStoppedEvent(BaseEvent):
     """Motion stopped event"""
     event: Literal["motion_stopped"] = "motion_stopped"
     device_sn: str
-    video_url: str
-    video_status: Literal["completed"] = "completed"
     duration_seconds: int
 
 

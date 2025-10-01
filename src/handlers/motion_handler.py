@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 from ..models.events import MotionDetectedEvent, MotionStoppedEvent
-from ..services.video_recorder import VideoRecorder
 from ..services.workato_client import WorkatoWebhook
 from ..services.error_logger import ErrorLogger
 from ..clients.websocket_client import WebSocketClient
@@ -21,26 +20,24 @@ class MotionState:
         self.device_sn = device_sn
         self.first_motion_time: Optional[datetime] = None
         self.last_motion_time: Optional[datetime] = None
-        self.is_recording = False
+        self.is_active = False
         self.snooze_until: Optional[datetime] = None
-        self.video_url: Optional[str] = None
         self.no_motion_task: Optional[asyncio.Task] = None
         self.max_duration_task: Optional[asyncio.Task] = None
 
 
 class MotionAlarmHandler:
     """
-    Handles motion detection events and video recording lifecycle
+    Handles motion detection events and webhook notifications
 
     Workflow:
-    1. Motion detected -> Start recording -> Send webhook
-    2. No motion for 60s -> Stop recording -> Send webhook
-    3. Max 15min -> Stop recording -> Snooze for 1 hour
+    1. Motion detected -> Send webhook
+    2. No motion for 60s -> Send motion stopped webhook
+    3. Max 15min -> Stop tracking -> Snooze for 1 hour
     """
 
     def __init__(
         self,
-        video_recorder: VideoRecorder,
         workato_webhook: WorkatoWebhook,
         error_logger: ErrorLogger,
         websocket_client: WebSocketClient,
@@ -52,15 +49,13 @@ class MotionAlarmHandler:
         Initialize motion alarm handler
 
         Args:
-            video_recorder: VideoRecorder instance
             workato_webhook: WorkatoWebhook instance
             error_logger: ErrorLogger instance
             websocket_client: WebSocketClient instance
             motion_timeout_seconds: Seconds of no motion before stopping
-            max_duration_seconds: Maximum recording duration
+            max_duration_seconds: Maximum motion tracking duration
             snooze_duration_seconds: Snooze duration after max reached
         """
-        self.video_recorder = video_recorder
         self.workato_webhook = workato_webhook
         self.error_logger = error_logger
         self.websocket_client = websocket_client
@@ -102,10 +97,10 @@ class MotionAlarmHandler:
         now = datetime.now()
         state.last_motion_time = now
 
-        if not state.is_recording:
-            # Start new recording
+        if not state.is_active:
+            # Start new motion tracking
             state.first_motion_time = now
-            await self._start_recording(state)
+            await self._start_motion_tracking(state)
         else:
             # Reset no-motion timer
             if state.no_motion_task:
@@ -114,20 +109,16 @@ class MotionAlarmHandler:
                 self._wait_for_no_motion(state)
             )
 
-    async def _start_recording(self, state: MotionState) -> None:
-        """Start recording for device"""
+    async def _start_motion_tracking(self, state: MotionState) -> None:
+        """Start motion tracking for device"""
         try:
-            # Start video recording
-            video_url = await self.video_recorder.start_recording(state.device_sn)
-            state.video_url = video_url
-            state.is_recording = True
+            state.is_active = True
 
-            logger.info(f"📹 Recording started for {state.device_sn}: {video_url}")
+            logger.info(f"🚨 Motion tracking started for {state.device_sn}")
 
             # Send motion detected webhook
             event = MotionDetectedEvent(
                 device_sn=state.device_sn,
-                video_url=video_url,
             )
 
             await self.workato_webhook.send_event(event)
@@ -142,23 +133,23 @@ class MotionAlarmHandler:
             )
 
         except Exception as e:
-            logger.error(f"Error starting recording for {state.device_sn}: {e}")
+            logger.error(f"Error starting motion tracking for {state.device_sn}: {e}")
             await self.error_logger.log_failed_retry(
-                operation="start_recording",
+                operation="start_motion_tracking",
                 error=e,
                 context={"device_sn": state.device_sn},
                 retry_count=3,
             )
 
     async def _wait_for_no_motion(self, state: MotionState) -> None:
-        """Wait for motion timeout, then stop recording"""
+        """Wait for motion timeout, then stop tracking"""
         try:
             await asyncio.sleep(self.motion_timeout)
 
             logger.info(
-                f"No motion for {self.motion_timeout}s on {state.device_sn}, stopping recording"
+                f"No motion for {self.motion_timeout}s on {state.device_sn}, stopping tracking"
             )
-            await self._stop_recording(state, reason="no_motion")
+            await self._stop_motion_tracking(state, reason="no_motion")
 
         except asyncio.CancelledError:
             # Timer was reset due to new motion
@@ -170,9 +161,9 @@ class MotionAlarmHandler:
             await asyncio.sleep(self.max_duration)
 
             logger.warning(
-                f"Max recording duration ({self.max_duration}s) reached for {state.device_sn}"
+                f"Max motion duration ({self.max_duration}s) reached for {state.device_sn}"
             )
-            await self._stop_recording(state, reason="max_duration")
+            await self._stop_motion_tracking(state, reason="max_duration")
 
             # Snooze the device
             state.snooze_until = datetime.now() + timedelta(seconds=self.snooze_duration)
@@ -188,12 +179,12 @@ class MotionAlarmHandler:
                 logger.error(f"Failed to send snooze command: {e}")
 
         except asyncio.CancelledError:
-            # Recording stopped before max duration
+            # Motion tracking stopped before max duration
             pass
 
-    async def _stop_recording(self, state: MotionState, reason: str = "unknown") -> None:
-        """Stop recording for device"""
-        if not state.is_recording:
+    async def _stop_motion_tracking(self, state: MotionState, reason: str = "unknown") -> None:
+        """Stop motion tracking for device"""
+        if not state.is_active:
             return
 
         try:
@@ -203,25 +194,22 @@ class MotionAlarmHandler:
             if state.max_duration_task:
                 state.max_duration_task.cancel()
 
-            # Stop video recording
-            result = await self.video_recorder.stop_recording(state.device_sn)
+            # Calculate duration
+            if state.first_motion_time:
+                duration_seconds = int((datetime.now() - state.first_motion_time).total_seconds())
+            else:
+                duration_seconds = 0
 
-            if not result:
-                logger.warning(f"No active recording to stop for {state.device_sn}")
-                return
-
-            video_url, duration_seconds = result
-            state.is_recording = False
+            state.is_active = False
 
             logger.info(
-                f"⏹️  Recording stopped for {state.device_sn} "
+                f"⏹️  Motion tracking stopped for {state.device_sn} "
                 f"(duration: {duration_seconds}s, reason: {reason})"
             )
 
             # Send motion stopped webhook
             event = MotionStoppedEvent(
                 device_sn=state.device_sn,
-                video_url=video_url,
                 duration_seconds=duration_seconds,
             )
 
@@ -229,9 +217,9 @@ class MotionAlarmHandler:
             logger.info(f"✅ Motion stopped webhook sent for {state.device_sn}")
 
         except Exception as e:
-            logger.error(f"Error stopping recording for {state.device_sn}: {e}")
+            logger.error(f"Error stopping motion tracking for {state.device_sn}: {e}")
             await self.error_logger.log_failed_retry(
-                operation="stop_recording",
+                operation="stop_motion_tracking",
                 error=e,
                 context={"device_sn": state.device_sn, "reason": reason},
                 retry_count=3,
@@ -246,8 +234,7 @@ class MotionAlarmHandler:
 
         return {
             "device_sn": device_sn,
-            "is_recording": state.is_recording,
-            "video_url": state.video_url,
+            "is_active": state.is_active,
             "first_motion_time": state.first_motion_time.isoformat() if state.first_motion_time else None,
             "last_motion_time": state.last_motion_time.isoformat() if state.last_motion_time else None,
             "snooze_until": state.snooze_until.isoformat() if state.snooze_until else None,

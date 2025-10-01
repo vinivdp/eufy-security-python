@@ -5,10 +5,8 @@ import logging
 from typing import Optional
 
 from .clients.websocket_client import WebSocketClient
-from .services.video_recorder import VideoRecorder
 from .services.workato_client import WorkatoWebhook
 from .services.error_logger import ErrorLogger
-from .services.storage_manager import StorageManager
 from .services.device_health_checker import DeviceHealthChecker
 from .handlers.motion_handler import MotionAlarmHandler
 from .handlers.offline_handler import OfflineAlarmHandler
@@ -59,20 +57,6 @@ class EventOrchestrator:
             heartbeat_interval=config.eufy.heartbeat_interval,
         )
 
-        self.video_recorder = VideoRecorder(
-            storage_path=config.recording.storage_path,
-            public_url_base=config.server.public_url,
-            websocket_client=self.websocket_client,
-            video_codec=config.recording.video_codec,
-            video_quality=config.recording.video_quality,
-        )
-
-        self.storage_manager = StorageManager(
-            storage_path=config.recording.storage_path,
-            retention_days=config.recording.retention_days,
-            min_free_space_gb=config.storage.min_free_space_gb,
-        )
-
         self.health_checker = DeviceHealthChecker(
             websocket_client=self.websocket_client,
             health_check_timeout=10,
@@ -82,7 +66,6 @@ class EventOrchestrator:
         logger.info("Initializing event handlers...")
 
         self.motion_handler = MotionAlarmHandler(
-            video_recorder=self.video_recorder,
             workato_webhook=self.workato_webhook,
             error_logger=self.error_logger,
             websocket_client=self.websocket_client,
@@ -133,7 +116,6 @@ class EventOrchestrator:
 
         # Start background tasks
         asyncio.create_task(self._run_websocket_listener())
-        asyncio.create_task(self._run_storage_cleanup())
 
         logger.info("✅ Orchestrator started successfully")
 
@@ -147,13 +129,6 @@ class EventOrchestrator:
 
         # Disconnect WebSocket
         await self.websocket_client.disconnect()
-
-        # Stop any active recordings
-        for device_sn in list(self.video_recorder.active_recordings.keys()):
-            try:
-                await self.video_recorder.stop_recording(device_sn)
-            except Exception as e:
-                logger.error(f"Error stopping recording for {device_sn}: {e}")
 
         logger.info("✅ Orchestrator stopped")
 
@@ -176,10 +151,6 @@ class EventOrchestrator:
         # Battery events
         self.websocket_client.on("low battery", self.battery_handler.on_low_battery)
 
-        # Livestream data events (for video recording)
-        self.websocket_client.on("livestream video data", self._on_livestream_video_data)
-        self.websocket_client.on("livestream audio data", self._on_livestream_audio_data)
-
         logger.info("✅ Event handlers registered")
 
     async def _run_websocket_listener(self) -> None:
@@ -195,66 +166,11 @@ class EventOrchestrator:
                 retry_count=1,
             )
 
-    async def _run_storage_cleanup(self) -> None:
-        """Run periodic storage cleanup"""
-        try:
-            await self.storage_manager.start_scheduled_cleanup(interval_hours=24)
-        except Exception as e:
-            logger.error(f"Storage cleanup error: {e}", exc_info=True)
-
-    async def _on_livestream_video_data(self, event: dict) -> None:
-        """Handle livestream video data"""
-        device_sn = event.get("serialNumber")
-        buffer = event.get("buffer")
-        metadata = event.get("metadata", {})
-
-        if device_sn and buffer:
-            # Buffer format: {"data": [byte1, byte2, byte3, ...]}
-            # Convert to bytes object
-            if isinstance(buffer, dict) and "data" in buffer:
-                byte_array = buffer["data"]
-                data_bytes = bytes(byte_array)
-                await self.video_recorder.write_livestream_data(device_sn, data_bytes, is_video=True)
-
-                # Log metadata on first packet (debug)
-                if metadata:
-                    logger.debug(
-                        f"Video data: {device_sn} "
-                        f"codec={metadata.get('videoCodec')} "
-                        f"fps={metadata.get('videoFPS')} "
-                        f"resolution={metadata.get('videoWidth')}x{metadata.get('videoHeight')}"
-                    )
-            else:
-                logger.warning(f"Unexpected buffer format for {device_sn}: {type(buffer)}")
-
-    async def _on_livestream_audio_data(self, event: dict) -> None:
-        """Handle livestream audio data"""
-        device_sn = event.get("serialNumber")
-        buffer = event.get("buffer")
-        metadata = event.get("metadata", {})
-
-        if device_sn and buffer:
-            # Buffer format: {"data": [byte1, byte2, byte3, ...]}
-            # Convert to bytes object
-            if isinstance(buffer, dict) and "data" in buffer:
-                byte_array = buffer["data"]
-                data_bytes = bytes(byte_array)
-                await self.video_recorder.write_livestream_data(device_sn, data_bytes, is_video=False)
-
-                # Log metadata on first packet (debug)
-                if metadata:
-                    logger.debug(
-                        f"Audio data: {device_sn} codec={metadata.get('audioCodec')}"
-                    )
-            else:
-                logger.warning(f"Unexpected audio buffer format for {device_sn}: {type(buffer)}")
-
     def get_status(self) -> dict:
         """Get orchestrator status"""
         return {
             "running": self._running,
             "websocket_connected": self.websocket_client.ws is not None,
-            "active_recordings": len(self.video_recorder.active_recordings),
             "offline_devices": len(self.offline_handler.offline_since),
         }
 
