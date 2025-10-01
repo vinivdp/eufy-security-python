@@ -62,34 +62,48 @@ class DeviceHealthChecker:
 
         # Track consecutive failures per device
         self.failure_counts: dict[str, int] = {}
-        # Track offline devices to avoid duplicate alerts (persisted to disk)
-        self.offline_devices: set[str] = self._load_offline_devices()
+        # Track offline devices with timestamps (persisted to disk)
+        self.offline_devices_timestamps: dict[str, datetime] = self._load_offline_devices()
         # Track last battery alert time per device
         self.last_battery_alert: dict[str, datetime] = {}
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
-    def _load_offline_devices(self) -> set[str]:
-        """Load offline devices from persistent storage"""
+    def _load_offline_devices(self) -> dict[str, datetime]:
+        """Load offline devices with timestamps from persistent storage"""
         try:
             if OFFLINE_DEVICES_FILE.exists():
                 with open(OFFLINE_DEVICES_FILE, "r") as f:
                     data = json.load(f)
-                    devices = set(data.get("offline_devices", []))
+                    # Convert ISO timestamps back to datetime objects
+                    devices = {}
+                    for device_sn, timestamp_str in data.get("offline_devices", {}).items():
+                        try:
+                            devices[device_sn] = datetime.fromisoformat(timestamp_str)
+                        except (ValueError, TypeError):
+                            # If timestamp is invalid, use current time
+                            devices[device_sn] = get_brasilia_now()
                     logger.info(f"📂 Loaded {len(devices)} offline devices from persistent storage")
                     return devices
         except Exception as e:
             logger.error(f"Failed to load offline devices: {e}")
-        return set()
+        return {}
 
     def _save_offline_devices(self) -> None:
-        """Save offline devices to persistent storage"""
+        """Save offline devices with timestamps to persistent storage"""
         try:
             OFFLINE_DEVICES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            # Convert datetime objects to ISO format strings
+            data = {
+                "offline_devices": {
+                    device_sn: timestamp.isoformat()
+                    for device_sn, timestamp in self.offline_devices_timestamps.items()
+                }
+            }
             with open(OFFLINE_DEVICES_FILE, "w") as f:
-                json.dump({"offline_devices": list(self.offline_devices)}, f)
-            logger.debug(f"💾 Saved {len(self.offline_devices)} offline devices to persistent storage")
+                json.dump(data, f, indent=2)
+            logger.debug(f"💾 Saved {len(self.offline_devices_timestamps)} offline devices to persistent storage")
         except Exception as e:
             logger.error(f"Failed to save offline devices: {e}")
 
@@ -156,6 +170,26 @@ class DeviceHealthChecker:
             device_sn: Device serial number
             slack_channel: Slack channel for alerts
         """
+        # Skip health check if device is offline and within 24-hour cooldown
+        if device_sn in self.offline_devices_timestamps:
+            last_alert_time = self.offline_devices_timestamps[device_sn]
+            now = get_brasilia_now()
+            time_since_alert = now - last_alert_time
+
+            if time_since_alert < timedelta(hours=24):
+                logger.debug(
+                    f"⏸️  Skipping health check for offline device {device_sn} "
+                    f"(cooldown: {time_since_alert.total_seconds() / 3600:.1f}h / 24h)"
+                )
+                return
+            else:
+                # 24 hours passed, remove from offline set and retry health check
+                logger.info(f"🔄 Retrying health check for {device_sn} after 24h cooldown")
+                del self.offline_devices_timestamps[device_sn]
+                self._save_offline_devices()
+                # Reset failure count for fresh start
+                self.failure_counts.pop(device_sn, None)
+
         try:
             # Query device properties (battery level)
             response = await self.websocket_client.send_command(
@@ -199,9 +233,9 @@ class DeviceHealthChecker:
             logger.info(f"✅ Camera {device_sn} is back online")
             del self.failure_counts[device_sn]
 
-        # Remove from offline set (no webhook sent when recovering)
-        if device_sn in self.offline_devices:
-            self.offline_devices.remove(device_sn)
+        # Remove from offline dict (no webhook sent when recovering)
+        if device_sn in self.offline_devices_timestamps:
+            del self.offline_devices_timestamps[device_sn]
             self._save_offline_devices()
             logger.info(f"📡 Camera {device_sn} recovered from offline state")
 
@@ -226,16 +260,15 @@ class DeviceHealthChecker:
             slack_channel: Slack channel for alerts
             error_code: Error code from the failed check
         """
-        # Special handling for device_not_found - don't spam alerts
+        # Special handling for device_not_found - treat as offline (device is powered off/disconnected)
         if error_code == "device_not_found":
-            # Only log once and mark offline immediately to prevent spam
-            if device_sn not in self.offline_devices:
-                logger.error(
-                    f"❌ Device {device_sn} not found in eufy-security-ws. "
-                    f"This device may need to be removed from the camera registry."
+            # Only alert once and mark offline with timestamp
+            if device_sn not in self.offline_devices_timestamps:
+                logger.warning(
+                    f"📴 Device {device_sn} is offline (device_not_found - likely powered off)"
                 )
                 await self._send_offline_alert(device_sn, slack_channel)
-                self.offline_devices.add(device_sn)
+                self.offline_devices_timestamps[device_sn] = get_brasilia_now()
                 self._save_offline_devices()
                 # Set failure count to threshold to prevent future alerts
                 self.failure_counts[device_sn] = self.failure_threshold
@@ -252,11 +285,11 @@ class DeviceHealthChecker:
 
         # Check if threshold reached
         if failure_count >= self.failure_threshold:
-            if device_sn not in self.offline_devices:
+            if device_sn not in self.offline_devices_timestamps:
                 # First time reaching threshold - send alert
                 logger.warning(f"📴 Sending offline alert for {device_sn} (first time at threshold)")
                 await self._send_offline_alert(device_sn, slack_channel)
-                self.offline_devices.add(device_sn)
+                self.offline_devices_timestamps[device_sn] = get_brasilia_now()
                 self._save_offline_devices()
             else:
                 logger.debug(f"Device {device_sn} already marked offline, skipping duplicate alert")
