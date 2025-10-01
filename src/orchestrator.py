@@ -182,7 +182,7 @@ class EventOrchestrator:
         """Get orchestrator status"""
         cameras_count = len(self.camera_registry.cameras)
         open_cameras = len([c for c in self.camera_registry.cameras.values() if c.state == "open"])
-        offline_cameras = len(self.health_checker.offline_devices)
+        offline_cameras = len(self.health_checker.offline_devices_timestamps)
 
         return {
             "running": self._running,
