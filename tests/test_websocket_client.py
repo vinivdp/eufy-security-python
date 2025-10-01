@@ -348,3 +348,112 @@ async def test_reconnect_handles_connect_failure(ws_client):
 
         # Should not raise exception
         await ws_client._reconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_command_with_response_success(ws_client):
+    """Test sending command and receiving response"""
+    mock_ws = AsyncMock()
+    ws_client.ws = mock_ws
+
+    # Simulate response coming back
+    async def simulate_response():
+        await asyncio.sleep(0.01)
+        response = {
+            "type": "result",
+            "success": True,
+            "messageId": None,  # Will be set by actual call
+            "result": {"battery": 85}
+        }
+        # Find the pending request and resolve it
+        if ws_client._pending_requests:
+            message_id = list(ws_client._pending_requests.keys())[0]
+            response["messageId"] = message_id
+            await ws_client._handle_event(response)
+
+    # Start response simulation
+    asyncio.create_task(simulate_response())
+
+    # Send command with response
+    response = await ws_client.send_command(
+        "device.get_properties",
+        {"serialNumber": "TEST123", "properties": ["battery"]},
+        wait_response=True,
+        timeout=1.0
+    )
+
+    # Verify response was received
+    assert response is not None
+    assert response["success"] is True
+    assert response["result"]["battery"] == 85
+
+
+@pytest.mark.asyncio
+async def test_send_command_with_response_timeout(ws_client):
+    """Test sending command times out when no response"""
+    mock_ws = AsyncMock()
+    ws_client.ws = mock_ws
+
+    # Send command with short timeout (no response will come)
+    response = await ws_client.send_command(
+        "device.get_properties",
+        {"serialNumber": "TEST123"},
+        wait_response=True,
+        timeout=0.1
+    )
+
+    # Should return None on timeout
+    assert response is None
+
+
+@pytest.mark.asyncio
+async def test_send_command_without_wait_response(ws_client):
+    """Test sending command without waiting for response (backward compatibility)"""
+    mock_ws = AsyncMock()
+    ws_client.ws = mock_ws
+
+    # Send command without waiting
+    response = await ws_client.send_command("test.command", {"param": "value"})
+
+    # Should return None
+    assert response is None
+    mock_ws.send.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_result_event_resolves_pending_request(ws_client):
+    """Test handling result event resolves pending request"""
+    import uuid
+
+    # Create a pending request
+    message_id = str(uuid.uuid4())
+    future = asyncio.get_event_loop().create_future()
+    ws_client._pending_requests[message_id] = future
+
+    # Handle result event
+    result_event = {
+        "type": "result",
+        "messageId": message_id,
+        "success": True,
+        "result": {"data": "test"}
+    }
+
+    await ws_client._handle_event(result_event)
+
+    # Future should be resolved
+    assert future.done()
+    assert future.result() == result_event
+
+
+@pytest.mark.asyncio
+async def test_handle_result_event_without_pending_request(ws_client):
+    """Test handling result event without pending request (should not crash)"""
+    result_event = {
+        "type": "result",
+        "messageId": "unknown-id",
+        "success": False,
+        "errorCode": "device_not_found"
+    }
+
+    # Should not raise exception
+    await ws_client._handle_event(result_event)
