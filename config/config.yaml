@@ -39,7 +39,9 @@ alerts:
   battery:
     cooldown_hours: 24
   offline:
-    debounce_seconds: 30
+    polling_interval_minutes: 5
+    failure_threshold: 3
+    battery_threshold_percent: 30
 
 logging:
   level: "${LOG_LEVEL:INFO}"
