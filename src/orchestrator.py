@@ -9,6 +9,7 @@ from .services.video_recorder import VideoRecorder
 from .services.workato_client import WorkatoWebhook
 from .services.error_logger import ErrorLogger
 from .services.storage_manager import StorageManager
+from .services.device_health_checker import DeviceHealthChecker
 from .handlers.motion_handler import MotionAlarmHandler
 from .handlers.offline_handler import OfflineAlarmHandler
 from .handlers.battery_handler import BatteryAlarmHandler
@@ -72,6 +73,11 @@ class EventOrchestrator:
             min_free_space_gb=config.storage.min_free_space_gb,
         )
 
+        self.health_checker = DeviceHealthChecker(
+            websocket_client=self.websocket_client,
+            health_check_timeout=10,
+        )
+
         # Initialize handlers
         logger.info("Initializing event handlers...")
 
@@ -88,6 +94,7 @@ class EventOrchestrator:
         self.offline_handler = OfflineAlarmHandler(
             workato_webhook=self.workato_webhook,
             error_logger=self.error_logger,
+            health_checker=self.health_checker,
             debounce_seconds=config.alerts.offline.debounce_seconds,
         )
 
@@ -157,11 +164,14 @@ class EventOrchestrator:
         # Motion events
         self.websocket_client.on("motion detected", self.motion_handler.on_motion_detected)
 
-        # Offline events
+        # Offline events (legacy disconnect-based)
         self.websocket_client.on("disconnected", self.offline_handler.on_disconnect)
         self.websocket_client.on("device removed", self.offline_handler.on_disconnect)
         self.websocket_client.on("connected", self.offline_handler.on_reconnect)
         self.websocket_client.on("device added", self.offline_handler.on_reconnect)
+
+        # Property changed events (for DeviceState monitoring)
+        self.websocket_client.on("property changed", self.offline_handler.on_device_state_changed)
 
         # Battery events
         self.websocket_client.on("low battery", self.battery_handler.on_low_battery)
@@ -196,20 +206,48 @@ class EventOrchestrator:
         """Handle livestream video data"""
         device_sn = event.get("serialNumber")
         buffer = event.get("buffer")
+        metadata = event.get("metadata", {})
 
         if device_sn and buffer:
-            # Convert buffer to bytes (assuming it's base64 or raw bytes)
-            # This would need proper implementation based on actual data format
-            await self.video_recorder.write_livestream_data(device_sn, buffer)
+            # Buffer format: {"data": [byte1, byte2, byte3, ...]}
+            # Convert to bytes object
+            if isinstance(buffer, dict) and "data" in buffer:
+                byte_array = buffer["data"]
+                data_bytes = bytes(byte_array)
+                await self.video_recorder.write_livestream_data(device_sn, data_bytes, is_video=True)
+
+                # Log metadata on first packet (debug)
+                if metadata:
+                    logger.debug(
+                        f"Video data: {device_sn} "
+                        f"codec={metadata.get('videoCodec')} "
+                        f"fps={metadata.get('videoFPS')} "
+                        f"resolution={metadata.get('videoWidth')}x{metadata.get('videoHeight')}"
+                    )
+            else:
+                logger.warning(f"Unexpected buffer format for {device_sn}: {type(buffer)}")
 
     async def _on_livestream_audio_data(self, event: dict) -> None:
         """Handle livestream audio data"""
         device_sn = event.get("serialNumber")
         buffer = event.get("buffer")
+        metadata = event.get("metadata", {})
 
         if device_sn and buffer:
-            # Audio data would be written to ffmpeg along with video
-            await self.video_recorder.write_livestream_data(device_sn, buffer)
+            # Buffer format: {"data": [byte1, byte2, byte3, ...]}
+            # Convert to bytes object
+            if isinstance(buffer, dict) and "data" in buffer:
+                byte_array = buffer["data"]
+                data_bytes = bytes(byte_array)
+                await self.video_recorder.write_livestream_data(device_sn, data_bytes, is_video=False)
+
+                # Log metadata on first packet (debug)
+                if metadata:
+                    logger.debug(
+                        f"Audio data: {device_sn} codec={metadata.get('audioCodec')}"
+                    )
+            else:
+                logger.warning(f"Unexpected audio buffer format for {device_sn}: {type(buffer)}")
 
     def get_status(self) -> dict:
         """Get orchestrator status"""

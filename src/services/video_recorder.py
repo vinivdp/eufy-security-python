@@ -136,25 +136,35 @@ class VideoRecorder:
 
         return public_url, duration_seconds
 
-    async def write_livestream_data(self, device_sn: str, data: bytes) -> None:
+    async def write_livestream_data(self, device_sn: str, data: bytes, is_video: bool = True) -> None:
         """
         Write livestream data to ffmpeg process
 
         Args:
             device_sn: Device serial number
             data: Video/audio data bytes
+            is_video: True for video data, False for audio data
         """
         if device_sn not in self.active_recordings:
-            logger.warning(f"Received data for inactive recording: {device_sn}")
+            logger.warning(f"Received {'video' if is_video else 'audio'} data for inactive recording: {device_sn}")
             return
 
         _, process, _ = self.active_recordings[device_sn]
 
         try:
-            process.stdin.write(data)
-            await asyncio.sleep(0)  # Yield control
+            if process.stdin and not process.stdin.closed:
+                process.stdin.write(data)
+                process.stdin.flush()  # Ensure data is sent immediately
+                await asyncio.sleep(0)  # Yield control
+            else:
+                logger.warning(f"ffmpeg stdin closed for {device_sn}")
+        except BrokenPipeError:
+            logger.error(f"ffmpeg process died for {device_sn}")
+            # Clean up dead recording
+            if device_sn in self.active_recordings:
+                del self.active_recordings[device_sn]
         except Exception as e:
-            logger.error(f"Error writing to ffmpeg: {e}")
+            logger.error(f"Error writing to ffmpeg for {device_sn}: {e}")
 
     def is_recording(self, device_sn: str) -> bool:
         """Check if recording is active for device"""
