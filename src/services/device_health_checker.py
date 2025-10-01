@@ -261,17 +261,27 @@ class DeviceHealthChecker:
             error_code: Error code from the failed check
         """
         # Special handling for device_not_found - treat as offline (device is powered off/disconnected)
+        # But still require failure threshold to avoid false positives
         if error_code == "device_not_found":
-            # Only alert once and mark offline with timestamp
-            if device_sn not in self.offline_devices_timestamps:
-                logger.warning(
-                    f"📴 Device {device_sn} is offline (device_not_found - likely powered off)"
-                )
-                await self._send_offline_alert(device_sn, slack_channel)
-                self.offline_devices_timestamps[device_sn] = get_brasilia_now()
-                self._save_offline_devices()
-                # Set failure count to threshold to prevent future alerts
-                self.failure_counts[device_sn] = self.failure_threshold
+            # Increment failure count
+            self.failure_counts[device_sn] = self.failure_counts.get(device_sn, 0) + 1
+            failure_count = self.failure_counts[device_sn]
+
+            logger.warning(
+                f"📴 Device {device_sn} not found ({failure_count}/{self.failure_threshold} failures)"
+            )
+
+            # Only alert after reaching threshold
+            if failure_count >= self.failure_threshold:
+                if device_sn not in self.offline_devices_timestamps:
+                    logger.warning(
+                        f"📴 Device {device_sn} is offline (device_not_found - likely powered off)"
+                    )
+                    await self._send_offline_alert(device_sn, slack_channel)
+                    self.offline_devices_timestamps[device_sn] = get_brasilia_now()
+                    self._save_offline_devices()
+                else:
+                    logger.debug(f"Device {device_sn} already marked offline, skipping duplicate alert")
             return
 
         # Increment failure count

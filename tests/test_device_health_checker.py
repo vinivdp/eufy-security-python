@@ -133,7 +133,7 @@ async def test_check_camera_health_success(health_checker, mock_websocket_client
 
 @pytest.mark.asyncio
 async def test_check_camera_health_device_not_found(health_checker, mock_websocket_client, mock_workato_webhook):
-    """Test health check when device not found"""
+    """Test health check when device not found - requires failure threshold"""
     # Mock device_not_found response
     mock_websocket_client.send_command.return_value = {
         "type": "result",
@@ -141,13 +141,18 @@ async def test_check_camera_health_device_not_found(health_checker, mock_websock
         "errorCode": "device_not_found"
     }
 
+    # First two failures - should NOT send alert
     await health_checker._check_camera_health("OFFLINE_DEVICE", "test-channel")
+    await health_checker._check_camera_health("OFFLINE_DEVICE", "test-channel")
+    mock_workato_webhook.send_event.assert_not_called()
 
-    # Should send offline alert
+    # Third failure - should send alert
+    await health_checker._check_camera_health("OFFLINE_DEVICE", "test-channel")
     mock_workato_webhook.send_event.assert_called_once()
 
     # Device should be in offline_devices_timestamps
     assert "OFFLINE_DEVICE" in health_checker.offline_devices_timestamps
+    assert health_checker.failure_counts["OFFLINE_DEVICE"] == 3
 
 
 @pytest.mark.asyncio
