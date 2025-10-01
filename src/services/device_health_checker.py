@@ -1,9 +1,11 @@
 """Device health checker service - polling-based battery and offline monitoring"""
 
 import asyncio
+import json
 import logging
 from typing import Optional
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from ..models.events import LowBatteryEvent, CameraOfflineEvent
 from ..services.camera_registry import CameraRegistry, get_brasilia_now
@@ -11,6 +13,9 @@ from ..services.workato_client import WorkatoWebhook
 from ..services.error_logger import ErrorLogger
 
 logger = logging.getLogger(__name__)
+
+# Path to persist offline device state
+OFFLINE_DEVICES_FILE = Path("/tmp/eufy_offline_devices.json")
 
 
 class DeviceHealthChecker:
@@ -57,13 +62,36 @@ class DeviceHealthChecker:
 
         # Track consecutive failures per device
         self.failure_counts: dict[str, int] = {}
-        # Track offline devices to avoid duplicate alerts
-        self.offline_devices: set[str] = set()
+        # Track offline devices to avoid duplicate alerts (persisted to disk)
+        self.offline_devices: set[str] = self._load_offline_devices()
         # Track last battery alert time per device
         self.last_battery_alert: dict[str, datetime] = {}
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
+
+    def _load_offline_devices(self) -> set[str]:
+        """Load offline devices from persistent storage"""
+        try:
+            if OFFLINE_DEVICES_FILE.exists():
+                with open(OFFLINE_DEVICES_FILE, "r") as f:
+                    data = json.load(f)
+                    devices = set(data.get("offline_devices", []))
+                    logger.info(f"📂 Loaded {len(devices)} offline devices from persistent storage")
+                    return devices
+        except Exception as e:
+            logger.error(f"Failed to load offline devices: {e}")
+        return set()
+
+    def _save_offline_devices(self) -> None:
+        """Save offline devices to persistent storage"""
+        try:
+            OFFLINE_DEVICES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(OFFLINE_DEVICES_FILE, "w") as f:
+                json.dump({"offline_devices": list(self.offline_devices)}, f)
+            logger.debug(f"💾 Saved {len(self.offline_devices)} offline devices to persistent storage")
+        except Exception as e:
+            logger.error(f"Failed to save offline devices: {e}")
 
     async def start(self) -> None:
         """Start the background health check polling loop"""
@@ -144,16 +172,18 @@ class DeviceHealthChecker:
                 # Device responded - it's online
                 await self._handle_online_response(device_sn, slack_channel, response)
             else:
-                # Command failed
-                await self._handle_failure(device_sn, slack_channel)
+                # Command failed - log the error code if available
+                error_code = response.get("errorCode") if response else "no_response"
+                logger.debug(f"Health check failed for {device_sn}: {error_code}")
+                await self._handle_failure(device_sn, slack_channel, error_code)
 
         except asyncio.TimeoutError:
             logger.warning(f"⏱️  Health check timeout for {device_sn}")
-            await self._handle_failure(device_sn, slack_channel)
+            await self._handle_failure(device_sn, slack_channel, "timeout")
 
         except Exception as e:
             logger.error(f"Health check error for {device_sn}: {e}")
-            await self._handle_failure(device_sn, slack_channel)
+            await self._handle_failure(device_sn, slack_channel, "exception")
 
     async def _handle_online_response(self, device_sn: str, slack_channel: str, response: dict) -> None:
         """
@@ -172,6 +202,7 @@ class DeviceHealthChecker:
         # Remove from offline set (no webhook sent when recovering)
         if device_sn in self.offline_devices:
             self.offline_devices.remove(device_sn)
+            self._save_offline_devices()
             logger.info(f"📡 Camera {device_sn} recovered from offline state")
 
         # Check battery level
@@ -186,20 +217,36 @@ class DeviceHealthChecker:
             if battery_level < self.battery_threshold_percent:
                 await self._send_low_battery_alert(device_sn, slack_channel, battery_level)
 
-    async def _handle_failure(self, device_sn: str, slack_channel: str) -> None:
+    async def _handle_failure(self, device_sn: str, slack_channel: str, error_code: str = "unknown") -> None:
         """
         Handle failed health check (increment failure count)
 
         Args:
             device_sn: Device serial number
             slack_channel: Slack channel for alerts
+            error_code: Error code from the failed check
         """
+        # Special handling for device_not_found - don't spam alerts
+        if error_code == "device_not_found":
+            # Only log once and mark offline immediately to prevent spam
+            if device_sn not in self.offline_devices:
+                logger.error(
+                    f"❌ Device {device_sn} not found in eufy-security-ws. "
+                    f"This device may need to be removed from the camera registry."
+                )
+                await self._send_offline_alert(device_sn, slack_channel)
+                self.offline_devices.add(device_sn)
+                self._save_offline_devices()
+                # Set failure count to threshold to prevent future alerts
+                self.failure_counts[device_sn] = self.failure_threshold
+            return
+
         # Increment failure count
         self.failure_counts[device_sn] = self.failure_counts.get(device_sn, 0) + 1
         failure_count = self.failure_counts[device_sn]
 
         logger.warning(
-            f"❌ Health check failed for {device_sn} "
+            f"❌ Health check failed for {device_sn} ({error_code}) "
             f"({failure_count}/{self.failure_threshold} failures)"
         )
 
@@ -207,8 +254,12 @@ class DeviceHealthChecker:
         if failure_count >= self.failure_threshold:
             if device_sn not in self.offline_devices:
                 # First time reaching threshold - send alert
+                logger.warning(f"📴 Sending offline alert for {device_sn} (first time at threshold)")
                 await self._send_offline_alert(device_sn, slack_channel)
                 self.offline_devices.add(device_sn)
+                self._save_offline_devices()
+            else:
+                logger.debug(f"Device {device_sn} already marked offline, skipping duplicate alert")
 
     async def _send_low_battery_alert(self, device_sn: str, slack_channel: str, battery_level: int) -> None:
         """
