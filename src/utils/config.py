@@ -64,9 +64,16 @@ class BatteryAlertConfig(BaseSettings):
     cooldown_hours: int = 24
 
 
+class MotionConfig(BaseSettings):
+    """Motion detection configuration"""
+    state_timeout_minutes: int = 60
+
+
 class OfflineAlertConfig(BaseSettings):
     """Offline alert configuration"""
-    debounce_seconds: int = 30
+    polling_interval_minutes: int = 5
+    failure_threshold: int = 3
+    battery_threshold_percent: int = 30
 
 
 class AlertsConfig(BaseSettings):
@@ -101,6 +108,7 @@ class AppConfig(BaseSettings):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     error_logging: ErrorLoggingConfig = Field(default_factory=ErrorLoggingConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    motion: MotionConfig = Field(default_factory=MotionConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
@@ -147,6 +155,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         "retry": RetryConfig(**yaml_config.get("retry", {})),
         "error_logging": ErrorLoggingConfig(**yaml_config.get("error_logging", {})),
         "storage": StorageConfig(**yaml_config.get("storage", {})),
+        "motion": MotionConfig(**yaml_config.get("motion", {})),
         "alerts": alerts_config,
         "logging": LoggingConfig(**yaml_config.get("logging", {})),
     }
