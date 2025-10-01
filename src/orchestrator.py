@@ -8,9 +8,9 @@ from .clients.websocket_client import WebSocketClient
 from .services.workato_client import WorkatoWebhook
 from .services.error_logger import ErrorLogger
 from .services.device_health_checker import DeviceHealthChecker
+from .services.camera_registry import CameraRegistry
+from .services.state_timeout_checker import StateTimeoutChecker
 from .handlers.motion_handler import MotionAlarmHandler
-from .handlers.offline_handler import OfflineAlarmHandler
-from .handlers.battery_handler import BatteryAlarmHandler
 from .utils.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,11 @@ class EventOrchestrator:
     """
     Central coordinator for all event handlers and services
 
-    Initializes components and routes events to appropriate handlers
+    New architecture:
+    - Camera registry loaded from CSV
+    - Motion detection with state machine (closed→open, timeout→closed)
+    - Polling-based health monitoring (battery + offline)
+    - Only listens to motion_detected events
     """
 
     def __init__(self, config: AppConfig):
@@ -33,7 +37,7 @@ class EventOrchestrator:
         self.config = config
         self._running = False
 
-        # Initialize services
+        # Initialize core services
         logger.info("Initializing services...")
 
         self.workato_webhook = WorkatoWebhook(
@@ -57,34 +61,37 @@ class EventOrchestrator:
             heartbeat_interval=config.eufy.heartbeat_interval,
         )
 
+        # Camera registry
+        self.camera_registry = CameraRegistry(registry_path="config/cameras.txt")
+
+        # Health checker (polling-based)
         self.health_checker = DeviceHealthChecker(
             websocket_client=self.websocket_client,
-            health_check_timeout=10,
+            camera_registry=self.camera_registry,
+            workato_webhook=self.workato_webhook,
+            error_logger=self.error_logger,
+            polling_interval_minutes=config.alerts.offline.polling_interval_minutes,
+            failure_threshold=config.alerts.offline.failure_threshold,
+            battery_threshold_percent=config.alerts.offline.battery_threshold_percent,
+            battery_cooldown_hours=config.alerts.battery.cooldown_hours,
         )
 
-        # Initialize handlers
-        logger.info("Initializing event handlers...")
+        # State timeout checker (auto-close after 1hr)
+        self.state_timeout_checker = StateTimeoutChecker(
+            camera_registry=self.camera_registry,
+            workato_webhook=self.workato_webhook,
+            error_logger=self.error_logger,
+            timeout_minutes=config.motion.state_timeout_minutes,
+            check_interval_seconds=60,
+        )
+
+        # Initialize motion handler
+        logger.info("Initializing motion handler...")
 
         self.motion_handler = MotionAlarmHandler(
+            camera_registry=self.camera_registry,
             workato_webhook=self.workato_webhook,
             error_logger=self.error_logger,
-            websocket_client=self.websocket_client,
-            motion_timeout_seconds=config.recording.motion_timeout_seconds,
-            max_duration_seconds=config.recording.max_duration_seconds,
-            snooze_duration_seconds=config.recording.snooze_duration_seconds,
-        )
-
-        self.offline_handler = OfflineAlarmHandler(
-            workato_webhook=self.workato_webhook,
-            error_logger=self.error_logger,
-            health_checker=self.health_checker,
-            debounce_seconds=config.alerts.offline.debounce_seconds,
-        )
-
-        self.battery_handler = BatteryAlarmHandler(
-            workato_webhook=self.workato_webhook,
-            error_logger=self.error_logger,
-            cooldown_hours=config.alerts.battery.cooldown_hours,
         )
 
         logger.info("✅ All services and handlers initialized")
@@ -98,7 +105,16 @@ class EventOrchestrator:
         self._running = True
         logger.info("🚀 Starting Eufy Security Integration")
 
-        # Register event handlers
+        # Load camera registry
+        try:
+            await self.camera_registry.load()
+            cameras_count = len(self.camera_registry.cameras)
+            logger.info(f"📋 Loaded {cameras_count} cameras from registry")
+        except Exception as e:
+            logger.error(f"Failed to load camera registry: {e}")
+            raise
+
+        # Register event handlers (ONLY motion_detected)
         self._register_event_handlers()
 
         # Start WebSocket client
@@ -117,6 +133,10 @@ class EventOrchestrator:
         # Start background tasks
         asyncio.create_task(self._run_websocket_listener())
 
+        # Start polling services
+        await self.health_checker.start()
+        await self.state_timeout_checker.start()
+
         logger.info("✅ Orchestrator started successfully")
 
     async def stop(self) -> None:
@@ -127,6 +147,10 @@ class EventOrchestrator:
         self._running = False
         logger.info("🛑 Stopping Eufy Security Integration")
 
+        # Stop background services
+        await self.health_checker.stop()
+        await self.state_timeout_checker.stop()
+
         # Disconnect WebSocket
         await self.websocket_client.disconnect()
 
@@ -136,22 +160,10 @@ class EventOrchestrator:
         """Register event handlers with WebSocket client"""
         logger.info("Registering event handlers...")
 
-        # Motion events
+        # ONLY listen to motion detected events
         self.websocket_client.on("motion detected", self.motion_handler.on_motion_detected)
 
-        # Offline events (legacy disconnect-based)
-        self.websocket_client.on("disconnected", self.offline_handler.on_disconnect)
-        self.websocket_client.on("device removed", self.offline_handler.on_disconnect)
-        self.websocket_client.on("connected", self.offline_handler.on_reconnect)
-        self.websocket_client.on("device added", self.offline_handler.on_reconnect)
-
-        # Property changed events (for DeviceState monitoring)
-        self.websocket_client.on("property changed", self.offline_handler.on_device_state_changed)
-
-        # Battery events
-        self.websocket_client.on("low battery", self.battery_handler.on_low_battery)
-
-        logger.info("✅ Event handlers registered")
+        logger.info("✅ Event handler registered (motion_detected only)")
 
     async def _run_websocket_listener(self) -> None:
         """Run WebSocket listener loop"""
@@ -168,10 +180,16 @@ class EventOrchestrator:
 
     def get_status(self) -> dict:
         """Get orchestrator status"""
+        cameras_count = len(self.camera_registry.cameras)
+        open_cameras = len([c for c in self.camera_registry.cameras.values() if c.state == "open"])
+        offline_cameras = len(self.health_checker.offline_devices)
+
         return {
             "running": self._running,
             "websocket_connected": self.websocket_client.ws is not None,
-            "offline_devices": len(self.offline_handler.offline_since),
+            "total_cameras": cameras_count,
+            "open_cameras": open_cameras,
+            "offline_cameras": offline_cameras,
         }
 
     async def _route_event(self, event: dict) -> None:
@@ -186,14 +204,8 @@ class EventOrchestrator:
         try:
             if event_type == "motion_detected" or event_type == "motion detected":
                 await self.motion_handler.on_motion_detected(event)
-            elif event_type in ["device.disconnect", "disconnected", "device removed"]:
-                await self.offline_handler.on_disconnect(event)
-            elif event_type in ["device.connect", "connected", "device added"]:
-                await self.offline_handler.on_reconnect(event)
-            elif event_type == "low_battery" or event_type == "low battery":
-                await self.battery_handler.on_low_battery(event)
             else:
-                logger.debug(f"Unhandled event type: {event_type}")
+                logger.debug(f"Ignored event type: {event_type}")
         except Exception as e:
             logger.error(f"Error routing event {event_type}: {e}", exc_info=True)
             await self.error_logger.log_failed_retry(
