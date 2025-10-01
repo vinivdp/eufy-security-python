@@ -130,14 +130,13 @@ class DeviceHealthChecker:
         """
         try:
             # Query device properties (battery level)
-            response = await asyncio.wait_for(
-                self.websocket_client.send_command(
-                    "device.get_properties",
-                    {
-                        "serialNumber": device_sn,
-                        "properties": ["battery"]
-                    }
-                ),
+            response = await self.websocket_client.send_command(
+                "device.get_properties",
+                {
+                    "serialNumber": device_sn,
+                    "properties": ["battery"]
+                },
+                wait_response=True,
                 timeout=10.0
             )
 
@@ -176,7 +175,11 @@ class DeviceHealthChecker:
             logger.info(f"📡 Camera {device_sn} recovered from offline state")
 
         # Check battery level
-        battery_level = response.get("battery")
+        # Response structure: {"type": "result", "success": true, "result": {"properties": {"battery": ...}}}
+        result = response.get("result", {})
+        properties = result.get("properties", {})
+        battery_level = properties.get("battery")
+
         if battery_level is not None:
             logger.debug(f"Battery level for {device_sn}: {battery_level}%")
 

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from typing import Callable, Optional, Dict, Any
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -42,6 +43,9 @@ class WebSocketClient:
         self._running = False
         self._reconnect_task: Optional[asyncio.Task] = None
 
+        # Request-response correlation: messageId -> asyncio.Future
+        self._pending_requests: Dict[str, asyncio.Future] = {}
+
     async def connect(self) -> None:
         """Connect to WebSocket server with 3x retry"""
         try:
@@ -53,8 +57,6 @@ class WebSocketClient:
     @retry_async(max_attempts=3, delay=2.0, backoff=2.0)
     async def _connect_with_retry(self) -> None:
         """Internal connection method with retry"""
-        import uuid
-
         logger.info(f"Connecting to eufy-security-ws at {self.url}")
         self.ws = await websockets.connect(
             self.url,
@@ -88,18 +90,56 @@ class WebSocketClient:
             self.ws = None
             logger.info("WebSocket disconnected")
 
-    async def send_command(self, command: str, params: Optional[Dict[str, Any]] = None) -> None:
+    async def send_command(
+        self, command: str, params: Optional[Dict[str, Any]] = None, wait_response: bool = False, timeout: float = 10.0
+    ) -> Optional[Dict[str, Any]]:
         """
         Send command to eufy-security-ws with 3x retry
 
         Args:
             command: Command name (e.g., "device.start_livestream")
             params: Command parameters
+            wait_response: If True, wait for and return the response
+            timeout: Timeout in seconds when waiting for response
+
+        Returns:
+            Response dict if wait_response=True, otherwise None
         """
         if not self.ws:
             raise ConnectionError("WebSocket not connected")
 
-        await self._send_command_with_retry(command, params or {})
+        if wait_response:
+            return await self._send_command_with_response(command, params or {}, timeout)
+        else:
+            await self._send_command_with_retry(command, params or {})
+            return None
+
+    async def _send_command_with_response(
+        self, command: str, params: Dict[str, Any], timeout: float
+    ) -> Optional[Dict[str, Any]]:
+        """Send command and wait for response"""
+        message_id = str(uuid.uuid4())
+        message = {"messageId": message_id, "command": command, **params}
+
+        # Create a Future to wait for the response
+        future = asyncio.get_event_loop().create_future()
+        self._pending_requests[message_id] = future
+
+        try:
+            # Send the command
+            await self.ws.send(json.dumps(message))
+            logger.debug(f"Sent command with response: {command} (messageId: {message_id})")
+
+            # Wait for the response with timeout
+            response = await asyncio.wait_for(future, timeout=timeout)
+            return response
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout waiting for response to command: {command}")
+            return None
+        finally:
+            # Clean up the pending request
+            self._pending_requests.pop(message_id, None)
 
     @retry_async(max_attempts=3, delay=1.0, backoff=2.0)
     async def _send_command_with_retry(
@@ -154,7 +194,20 @@ class WebSocketClient:
                     await self._reconnect()
 
     async def _handle_event(self, event: dict) -> None:
-        """Handle incoming WebSocket event"""
+        """Handle incoming WebSocket event or response"""
+        # Handle command responses (type: "result")
+        if event.get("type") == "result":
+            message_id = event.get("messageId")
+            if message_id and message_id in self._pending_requests:
+                # Resolve the pending request with the response
+                future = self._pending_requests[message_id]
+                if not future.done():
+                    future.set_result(event)
+                logger.debug(f"✅ Resolved response for messageId: {message_id}")
+            else:
+                logger.debug(f"Received result without pending request: {event}")
+            return
+
         # Handle nested event structure from eufy-security-ws
         # Expected format: {"type": "event", "event": {"event": "motion detected", ...}}
         if event.get("type") == "event" and isinstance(event.get("event"), dict):
