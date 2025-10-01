@@ -16,11 +16,13 @@ from src.utils.config import (
     RetryConfig,
     ErrorLoggingConfig,
     StorageConfig,
+    MotionConfig,
     AlertsConfig,
     BatteryAlertConfig,
     OfflineAlertConfig,
     LoggingConfig,
 )
+from src.services.camera_registry import CameraRegistry, CameraInfo, get_brasilia_now
 
 
 @pytest.fixture
@@ -64,9 +66,16 @@ def mock_config() -> AppConfig:
             cleanup_schedule="0 3 * * *",
             min_free_space_gb=1
         ),
+        motion=MotionConfig(
+            state_timeout_minutes=60
+        ),
         alerts=AlertsConfig(
             battery=BatteryAlertConfig(cooldown_hours=1),
-            offline=OfflineAlertConfig(debounce_seconds=5)
+            offline=OfflineAlertConfig(
+                polling_interval_minutes=5,
+                failure_threshold=3,
+                battery_threshold_percent=30
+            )
         ),
         logging=LoggingConfig(
             level="INFO",
@@ -170,6 +179,30 @@ def sample_battery_event() -> dict:
         "batteryValue": 15,
         "timestamp": datetime.now().isoformat()
     }
+
+
+@pytest.fixture
+def mock_camera_registry():
+    """Create a mock CameraRegistry with test data"""
+    registry = MagicMock(spec=CameraRegistry)
+
+    # Mock camera data
+    test_camera = CameraInfo(
+        device_sn="T8600P1234567890",
+        slack_channel="test-channel",
+        latest_activity=get_brasilia_now(),
+        state="closed"
+    )
+
+    registry.cameras = {"T8600P1234567890": test_camera}
+    registry.get_camera = AsyncMock(return_value=test_camera)
+    registry.update_activity = AsyncMock()
+    registry.set_state = AsyncMock()
+    registry.get_all_cameras = AsyncMock(return_value=[test_camera])
+    registry.get_cameras_by_state = AsyncMock(return_value=[test_camera])
+    registry.get_slack_channel = MagicMock(return_value="test-channel")
+
+    return registry
 
 
 @pytest.fixture

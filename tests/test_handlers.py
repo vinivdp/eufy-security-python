@@ -6,294 +6,108 @@ from datetime import datetime
 from unittest.mock import AsyncMock
 
 from src.handlers.motion_handler import MotionAlarmHandler
-from src.handlers.offline_handler import OfflineAlarmHandler
-from src.handlers.battery_handler import BatteryAlarmHandler
-from src.models.events import MotionDetectedEvent, MotionStoppedEvent
+from src.models.events import MotionDetectedEvent, MotionStoppedEvent, get_brasilia_now
 
 
 @pytest.mark.asyncio
-async def test_motion_handler_start_tracking(
+async def test_motion_handler_closed_to_open(
+    mock_camera_registry,
     mock_workato_webhook,
     mock_error_logger,
-    mock_websocket_client,
     sample_motion_event
 ):
-    """Test motion handler starts tracking on motion detected"""
+    """Test motion handler transitions from closed to open"""
     handler = MotionAlarmHandler(
+        camera_registry=mock_camera_registry,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
-        websocket_client=mock_websocket_client,
-        motion_timeout_seconds=60,
-        max_duration_seconds=900,
     )
 
     await handler.on_motion_detected(sample_motion_event)
 
     # Verify webhook was sent
     mock_workato_webhook.send_event.assert_called_once()
+
+    # Verify state was updated to open
+    mock_camera_registry.set_state.assert_called_once_with(
+        sample_motion_event["serialNumber"],
+        "open"
+    )
+
+    # Verify activity was updated
+    mock_camera_registry.update_activity.assert_called_once()
 
     # Verify event data
     call_args = mock_workato_webhook.send_event.call_args[0][0]
     assert isinstance(call_args, MotionDetectedEvent)
     assert call_args.device_sn == sample_motion_event["serialNumber"]
+    assert call_args.state == "open"
+    assert call_args.slack_channel == "test-channel"
 
 
 @pytest.mark.asyncio
-async def test_motion_handler_no_motion_timeout(
+async def test_motion_handler_open_to_open(
+    mock_camera_registry,
     mock_workato_webhook,
     mock_error_logger,
-    mock_websocket_client,
     sample_motion_event
 ):
-    """Test motion handler stops tracking after timeout"""
+    """Test motion handler stays open when already open (no state change)"""
+    # Configure camera as already open
+    from src.services.camera_registry import CameraInfo
+    open_camera = CameraInfo(
+        device_sn="T8600P1234567890",
+        slack_channel="test-channel",
+        latest_activity=get_brasilia_now(),
+        state="open"  # Already open
+    )
+    mock_camera_registry.get_camera = AsyncMock(return_value=open_camera)
+
     handler = MotionAlarmHandler(
+        camera_registry=mock_camera_registry,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
-        websocket_client=mock_websocket_client,
-        motion_timeout_seconds=0.1,  # Short timeout for test
-        max_duration_seconds=900,
     )
 
     await handler.on_motion_detected(sample_motion_event)
-
-    # Wait for timeout
-    await asyncio.sleep(0.2)
-
-    # Verify webhook was sent (motion stopped)
-    assert mock_workato_webhook.send_event.call_count == 2
-
-    # Check second call was motion stopped
-    second_call = mock_workato_webhook.send_event.call_args_list[1][0][0]
-    assert isinstance(second_call, MotionStoppedEvent)
-
-
-@pytest.mark.asyncio
-async def test_motion_handler_reset_timeout_on_new_motion(
-    mock_workato_webhook,
-    mock_error_logger,
-    mock_websocket_client,
-    sample_motion_event
-):
-    """Test motion handler resets timeout when new motion detected"""
-    handler = MotionAlarmHandler(
-        workato_webhook=mock_workato_webhook,
-        error_logger=mock_error_logger,
-        websocket_client=mock_websocket_client,
-        motion_timeout_seconds=0.2,
-        max_duration_seconds=900,
-    )
-
-    # First motion
-    await handler.on_motion_detected(sample_motion_event)
-
-    # Wait half timeout
-    await asyncio.sleep(0.1)
-
-    # New motion resets timer
-    await handler.on_motion_detected(sample_motion_event)
-
-    # Wait original timeout duration
-    await asyncio.sleep(0.15)
-
-    # Should only have sent one motion detected (timer was reset, not stopped)
-    assert mock_workato_webhook.send_event.call_count == 1
-
-    # Wait for new timeout to expire
-    await asyncio.sleep(0.1)
-
-    # Now motion stopped should be sent
-    assert mock_workato_webhook.send_event.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_offline_handler_debounce(
-    mock_workato_webhook,
-    mock_error_logger,
-    mock_health_checker,
-    sample_offline_event
-):
-    """Test offline handler debounces disconnect events"""
-    handler = OfflineAlarmHandler(
-        workato_webhook=mock_workato_webhook,
-        error_logger=mock_error_logger,
-        health_checker=mock_health_checker,
-        debounce_seconds=0.1,  # Short debounce for test
-    )
-
-    await handler.on_disconnect(sample_offline_event)
-
-    # Should not send webhook immediately
-    mock_workato_webhook.send_event.assert_not_called()
-
-    # Wait for debounce
-    await asyncio.sleep(0.15)
-
-    # Now webhook should be sent
-    mock_workato_webhook.send_event.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_offline_handler_reconnect_cancels_alert(
-    mock_workato_webhook,
-    mock_error_logger,
-    mock_health_checker,
-    sample_offline_event
-):
-    """Test offline handler cancels alert if device reconnects"""
-    handler = OfflineAlarmHandler(
-        workato_webhook=mock_workato_webhook,
-        error_logger=mock_error_logger,
-        health_checker=mock_health_checker,
-        debounce_seconds=0.2,
-    )
-
-    # Disconnect
-    await handler.on_disconnect(sample_offline_event)
-
-    # Wait a bit
-    await asyncio.sleep(0.1)
-
-    # Reconnect before debounce expires
-    reconnect_event = {
-        "serialNumber": sample_offline_event["serialNumber"],
-        "event": "device.connect"
-    }
-    await handler.on_reconnect(reconnect_event)
-
-    # Wait for original debounce to expire
-    await asyncio.sleep(0.15)
-
-    # Webhook should not be sent
-    mock_workato_webhook.send_event.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_battery_handler_sends_alert(
-    mock_workato_webhook,
-    mock_error_logger,
-    sample_battery_event
-):
-    """Test battery handler sends alert for low battery"""
-    handler = BatteryAlarmHandler(
-        workato_webhook=mock_workato_webhook,
-        error_logger=mock_error_logger,
-        cooldown_hours=24,
-    )
-
-    await handler.on_low_battery(sample_battery_event)
 
     # Verify webhook was sent
     mock_workato_webhook.send_event.assert_called_once()
 
-    # Verify event data
+    # Verify state was NOT updated (camera already open, no transition)
+    mock_camera_registry.set_state.assert_not_called()
+
+    # Verify activity was updated
+    mock_camera_registry.update_activity.assert_called_once()
+
+    # Verify event data shows state=open
     call_args = mock_workato_webhook.send_event.call_args[0][0]
-    assert call_args.device_sn == sample_battery_event["serialNumber"]
-    assert call_args.battery_level == sample_battery_event["batteryValue"]
+    assert isinstance(call_args, MotionDetectedEvent)
+    assert call_args.state == "open"
 
 
 @pytest.mark.asyncio
-async def test_battery_handler_cooldown(
+async def test_motion_handler_unknown_camera(
+    mock_camera_registry,
     mock_workato_webhook,
     mock_error_logger,
-    sample_battery_event
-):
-    """Test battery handler respects cooldown period"""
-    handler = BatteryAlarmHandler(
-        workato_webhook=mock_workato_webhook,
-        error_logger=mock_error_logger,
-        cooldown_hours=1,
-    )
-
-    # First alert
-    await handler.on_low_battery(sample_battery_event)
-    assert mock_workato_webhook.send_event.call_count == 1
-
-    # Second alert immediately after (should be blocked)
-    await handler.on_low_battery(sample_battery_event)
-    assert mock_workato_webhook.send_event.call_count == 1  # Still 1
-
-
-@pytest.mark.asyncio
-async def test_get_device_state(
-    mock_workato_webhook,
-    mock_error_logger,
-    mock_websocket_client,
     sample_motion_event
 ):
-    """Test getting device state from motion handler"""
+    """Test motion handler handles unknown camera gracefully"""
+    # Configure registry to return None for unknown camera
+    mock_camera_registry.get_camera = AsyncMock(return_value=None)
+
     handler = MotionAlarmHandler(
+        camera_registry=mock_camera_registry,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
-        websocket_client=mock_websocket_client,
-        motion_timeout_seconds=60,
-        max_duration_seconds=900,
     )
 
-    device_sn = sample_motion_event["serialNumber"]
-
-    # No state initially
-    state = handler.get_device_state(device_sn)
-    assert state is None
-
-    # Start tracking
     await handler.on_motion_detected(sample_motion_event)
 
-    # Check state
-    state = handler.get_device_state(device_sn)
-    assert state is not None
-    assert state["device_sn"] == device_sn
-    assert state["is_active"] is True
+    # Should not send webhook for unknown camera
+    mock_workato_webhook.send_event.assert_not_called()
 
-
-@pytest.mark.asyncio
-async def test_get_offline_devices(
-    mock_workato_webhook,
-    mock_error_logger,
-    mock_health_checker,
-    sample_offline_event
-):
-    """Test getting list of offline devices"""
-    handler = OfflineAlarmHandler(
-        workato_webhook=mock_workato_webhook,
-        error_logger=mock_error_logger,
-        health_checker=mock_health_checker,
-        debounce_seconds=0.1,
-    )
-
-    # No offline devices initially
-    devices = handler.get_offline_devices()
-    assert len(devices) == 0
-
-    # Disconnect device
-    await handler.on_disconnect(sample_offline_event)
-
-    # Check offline devices
-    devices = handler.get_offline_devices()
-    assert len(devices) == 1
-    assert devices[0]["device_sn"] == sample_offline_event["serialNumber"]
-
-
-@pytest.mark.asyncio
-async def test_get_battery_alerts(
-    mock_workato_webhook,
-    mock_error_logger,
-    sample_battery_event
-):
-    """Test getting battery alert history"""
-    handler = BatteryAlarmHandler(
-        workato_webhook=mock_workato_webhook,
-        error_logger=mock_error_logger,
-        cooldown_hours=24,
-    )
-
-    # No alerts initially
-    alerts = handler.get_battery_alerts()
-    assert len(alerts) == 0
-
-    # Send alert
-    await handler.on_low_battery(sample_battery_event)
-
-    # Check alerts
-    alerts = handler.get_battery_alerts()
-    assert len(alerts) == 1
-    assert alerts[0]["device_sn"] == sample_battery_event["serialNumber"]
+    # Should not update state or activity
+    mock_camera_registry.set_state.assert_not_called()
+    mock_camera_registry.update_activity.assert_not_called()

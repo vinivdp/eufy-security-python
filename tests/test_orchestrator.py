@@ -17,11 +17,11 @@ async def test_orchestrator_initialization(mock_config):
     assert orchestrator.error_logger is not None
     assert orchestrator.websocket_client is not None
     assert orchestrator.health_checker is not None
+    assert orchestrator.camera_registry is not None
+    assert orchestrator.state_timeout_checker is not None
 
-    # Verify all handlers are initialized
+    # Verify motion handler is initialized (offline/battery handlers deprecated)
     assert orchestrator.motion_handler is not None
-    assert orchestrator.offline_handler is not None
-    assert orchestrator.battery_handler is not None
 
 
 @pytest.mark.asyncio
@@ -82,37 +82,27 @@ async def test_orchestrator_routes_motion_event(mock_config, sample_motion_event
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_routes_offline_event(mock_config, sample_offline_event):
-    """Test orchestrator routes offline events to offline handler"""
+async def test_orchestrator_ignores_offline_event(mock_config, sample_offline_event):
+    """Test orchestrator ignores offline events (now polling-based)"""
     orchestrator = EventOrchestrator(mock_config)
 
-    # Mock offline handler
-    orchestrator.offline_handler.on_disconnect = AsyncMock()
-
-    # Route event
+    # Route event - should be ignored
     await orchestrator._route_event(sample_offline_event)
 
-    # Verify handler was called
-    orchestrator.offline_handler.on_disconnect.assert_called_once_with(
-        sample_offline_event
-    )
+    # No handler should be called (offline detection is now polling-based)
+    # Just verify no exceptions raised
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_routes_battery_event(mock_config, sample_battery_event):
-    """Test orchestrator routes battery events to battery handler"""
+async def test_orchestrator_ignores_battery_event(mock_config, sample_battery_event):
+    """Test orchestrator ignores battery events (now polling-based)"""
     orchestrator = EventOrchestrator(mock_config)
 
-    # Mock battery handler
-    orchestrator.battery_handler.on_low_battery = AsyncMock()
-
-    # Route event
+    # Route event - should be ignored
     await orchestrator._route_event(sample_battery_event)
 
-    # Verify handler was called
-    orchestrator.battery_handler.on_low_battery.assert_called_once_with(
-        sample_battery_event
-    )
+    # No handler should be called (battery detection is now polling-based)
+    # Just verify no exceptions raised
 
 
 @pytest.mark.asyncio
@@ -159,7 +149,7 @@ async def test_orchestrator_config_injection(mock_config):
     orchestrator = EventOrchestrator(mock_config)
 
     # Verify config was passed to components
-    assert orchestrator.motion_handler.motion_timeout == mock_config.recording.motion_timeout_seconds
-    assert orchestrator.motion_handler.max_duration == mock_config.recording.max_duration_seconds
-    assert orchestrator.offline_handler.debounce_seconds == mock_config.alerts.offline.debounce_seconds
-    assert orchestrator.battery_handler.cooldown_hours == mock_config.alerts.battery.cooldown_hours
+    assert orchestrator.health_checker.polling_interval_minutes == mock_config.alerts.offline.polling_interval_minutes
+    assert orchestrator.health_checker.failure_threshold == mock_config.alerts.offline.failure_threshold
+    assert orchestrator.health_checker.battery_threshold_percent == mock_config.alerts.offline.battery_threshold_percent
+    assert orchestrator.state_timeout_checker.timeout_minutes == mock_config.motion.state_timeout_minutes

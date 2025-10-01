@@ -9,29 +9,42 @@ from src.models.events import (
     LowBatteryEvent,
     CameraOfflineEvent,
     SystemErrorEvent,
+    get_brasilia_now,
 )
 
 
 def test_motion_detected_event():
     """Test motion detected event creation"""
+    now = get_brasilia_now()
     event = MotionDetectedEvent(
-        device_sn="T8600P1234567890"
+        device_sn="T8600P1234567890",
+        slack_channel="test-channel",
+        state="open",
+        latest_activity=now
     )
 
     assert event.event == "motion_detected"
     assert event.device_sn == "T8600P1234567890"
+    assert event.slack_channel == "test-channel"
+    assert event.state == "open"
+    assert event.latest_activity == now
     assert isinstance(event.timestamp, datetime)
 
 
 def test_motion_stopped_event():
     """Test motion stopped event creation"""
+    now = get_brasilia_now()
     event = MotionStoppedEvent(
         device_sn="T8600P1234567890",
-        duration_seconds=120
+        slack_channel="test-channel",
+        duration_seconds=120,
+        latest_activity=now
     )
 
     assert event.event == "motion_stopped"
     assert event.device_sn == "T8600P1234567890"
+    assert event.slack_channel == "test-channel"
+    assert event.state == "closed"
     assert event.duration_seconds == 120
     assert isinstance(event.timestamp, datetime)
 
@@ -40,35 +53,38 @@ def test_low_battery_event():
     """Test low battery event creation"""
     event = LowBatteryEvent(
         device_sn="T8600P1234567890",
+        slack_channel="test-channel",
         battery_level=15
     )
 
     assert event.event == "low_battery"
     assert event.device_sn == "T8600P1234567890"
+    assert event.slack_channel == "test-channel"
     assert event.battery_level == 15
     assert isinstance(event.timestamp, datetime)
 
 
 def test_low_battery_event_without_level():
-    """Test low battery event without battery level"""
-    event = LowBatteryEvent(
-        device_sn="T8600P1234567890"
-    )
-
-    assert event.event == "low_battery"
-    assert event.device_sn == "T8600P1234567890"
-    assert event.battery_level is None
+    """Test low battery event requires battery_level"""
+    # battery_level is now required, not optional
+    with pytest.raises(Exception):  # Will raise validation error
+        event = LowBatteryEvent(
+            device_sn="T8600P1234567890",
+            slack_channel="test-channel"
+        )
 
 
 def test_camera_offline_event():
     """Test camera offline event creation"""
     event = CameraOfflineEvent(
         device_sn="T8600P1234567890",
+        slack_channel="test-channel",
         reason="connection_timeout"
     )
 
     assert event.event == "camera_offline"
     assert event.device_sn == "T8600P1234567890"
+    assert event.slack_channel == "test-channel"
     assert event.reason == "connection_timeout"
     assert isinstance(event.timestamp, datetime)
 
@@ -96,8 +112,12 @@ def test_system_error_event():
 
 def test_event_serialization():
     """Test event can be serialized to dict/JSON"""
+    now = get_brasilia_now()
     event = MotionDetectedEvent(
-        device_sn="T8600P1234567890"
+        device_sn="T8600P1234567890",
+        slack_channel="test-channel",
+        state="open",
+        latest_activity=now
     )
 
     data = event.model_dump()

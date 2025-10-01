@@ -50,13 +50,18 @@ async def test_send_webhook_success():
 @pytest.mark.asyncio
 async def test_send_event_model():
     """Test sending event model"""
+    from src.models.events import get_brasilia_now
+
     webhook = WorkatoWebhook(
         webhook_url="https://test.workato.com/webhook",
         rate_limit_per_second=100
     )
 
     event = MotionDetectedEvent(
-        device_sn="T8600P1234567890"
+        device_sn="T8600P1234567890",
+        slack_channel="test-channel",
+        state="open",
+        latest_activity=get_brasilia_now()
     )
 
     with patch("aiohttp.ClientSession.post") as mock_post:
