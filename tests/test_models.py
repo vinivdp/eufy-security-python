@@ -15,14 +15,11 @@ from src.models.events import (
 def test_motion_detected_event():
     """Test motion detected event creation"""
     event = MotionDetectedEvent(
-        device_sn="T8600P1234567890",
-        video_url="http://example.com/video.mp4"
+        device_sn="T8600P1234567890"
     )
 
     assert event.event == "motion_detected"
     assert event.device_sn == "T8600P1234567890"
-    assert event.video_url == "http://example.com/video.mp4"
-    assert event.video_status == "recording"
     assert isinstance(event.timestamp, datetime)
 
 
@@ -30,14 +27,11 @@ def test_motion_stopped_event():
     """Test motion stopped event creation"""
     event = MotionStoppedEvent(
         device_sn="T8600P1234567890",
-        video_url="http://example.com/video.mp4",
         duration_seconds=120
     )
 
     assert event.event == "motion_stopped"
     assert event.device_sn == "T8600P1234567890"
-    assert event.video_url == "http://example.com/video.mp4"
-    assert event.video_status == "completed"
     assert event.duration_seconds == 120
     assert isinstance(event.timestamp, datetime)
 
@@ -103,14 +97,11 @@ def test_system_error_event():
 def test_event_serialization():
     """Test event can be serialized to dict/JSON"""
     event = MotionDetectedEvent(
-        device_sn="T8600P1234567890",
-        video_url="http://example.com/video.mp4"
+        device_sn="T8600P1234567890"
     )
 
     data = event.model_dump()
 
     assert data["event"] == "motion_detected"
     assert data["device_sn"] == "T8600P1234567890"
-    assert data["video_url"] == "http://example.com/video.mp4"
-    assert data["video_status"] == "recording"
     assert "timestamp" in data

@@ -17,12 +17,8 @@ async def test_motion_detection_workflow(mock_config):
     orchestrator.websocket_client.connect = AsyncMock()
     orchestrator.websocket_client.send_command = AsyncMock()
 
-    with patch.object(orchestrator.video_recorder, '_start_ffmpeg_process') as mock_start, \
-         patch.object(orchestrator.video_recorder, '_stop_ffmpeg_process') as mock_stop, \
-         patch.object(orchestrator.workato_webhook, 'send') as mock_webhook:
+    with patch.object(orchestrator.workato_webhook, 'send') as mock_webhook:
 
-        mock_process = MagicMock()
-        mock_start.return_value = mock_process
         mock_webhook.return_value = {"success": True}
 
         # Start orchestrator
@@ -41,9 +37,6 @@ async def test_motion_detection_workflow(mock_config):
         # Wait a bit for async processing
         await asyncio.sleep(0.1)
 
-        # Verify recording started
-        assert orchestrator.video_recorder.is_recording("T8600P1234567890")
-
         # Verify webhook was sent
         assert mock_webhook.call_count >= 1
 
@@ -51,11 +44,6 @@ async def test_motion_detection_workflow(mock_config):
         call_args = mock_webhook.call_args_list[0][0][0]
         assert call_args["event"] == "motion_detected"
         assert call_args["device_sn"] == "T8600P1234567890"
-        assert "video_url" in call_args
-
-        # Stop recording
-        result = await orchestrator.video_recorder.stop_recording("T8600P1234567890")
-        assert result is not None
 
         # Stop orchestrator
         orchestrator.websocket_client.disconnect = AsyncMock()
@@ -131,11 +119,8 @@ async def test_multiple_devices_simultaneously(mock_config):
 
     orchestrator.websocket_client.send_command = AsyncMock()
 
-    with patch.object(orchestrator.video_recorder, '_start_ffmpeg_process') as mock_start, \
-         patch.object(orchestrator.workato_webhook, 'send') as mock_webhook:
+    with patch.object(orchestrator.workato_webhook, 'send') as mock_webhook:
 
-        mock_process = MagicMock()
-        mock_start.return_value = mock_process
         mock_webhook.return_value = {"success": True}
 
         # Motion from device 1
@@ -158,9 +143,9 @@ async def test_multiple_devices_simultaneously(mock_config):
 
         await asyncio.sleep(0.1)
 
-        # Verify both recordings are active
-        assert orchestrator.video_recorder.is_recording("DEVICE001")
-        assert orchestrator.video_recorder.is_recording("DEVICE002")
+        # Verify both motion states are active
+        assert orchestrator.motion_handler.get_device_state("DEVICE001") is not None
+        assert orchestrator.motion_handler.get_device_state("DEVICE002") is not None
 
         # Verify webhooks sent for both
         assert mock_webhook.call_count >= 2
@@ -187,9 +172,8 @@ async def test_error_recovery(mock_config):
         }
 
         # Should not crash the system
-        with patch.object(orchestrator.video_recorder, '_start_ffmpeg_process'):
-            orchestrator.websocket_client.send_command = AsyncMock()
-            await orchestrator._route_event(motion_event)
+        orchestrator.websocket_client.send_command = AsyncMock()
+        await orchestrator._route_event(motion_event)
 
         await asyncio.sleep(0.1)
 
@@ -200,19 +184,15 @@ async def test_error_recovery(mock_config):
 
 @pytest.mark.asyncio
 async def test_motion_timeout_integration(mock_config):
-    """Test motion timeout stops recording"""
+    """Test motion timeout stops tracking"""
     # Use very short timeout for test
     mock_config.recording.motion_timeout_seconds = 0.1
 
     orchestrator = EventOrchestrator(mock_config)
     orchestrator.websocket_client.send_command = AsyncMock()
 
-    with patch.object(orchestrator.video_recorder, '_start_ffmpeg_process') as mock_start, \
-         patch.object(orchestrator.video_recorder, '_stop_ffmpeg_process') as mock_stop, \
-         patch.object(orchestrator.workato_webhook, 'send') as mock_webhook:
+    with patch.object(orchestrator.workato_webhook, 'send') as mock_webhook:
 
-        mock_process = MagicMock()
-        mock_start.return_value = mock_process
         mock_webhook.return_value = {"success": True}
 
         # Motion detected
@@ -225,14 +205,18 @@ async def test_motion_timeout_integration(mock_config):
         await orchestrator._route_event(motion_event)
         await asyncio.sleep(0.05)
 
-        # Recording should be active
-        assert orchestrator.video_recorder.is_recording("T8600P1234567890")
+        # Motion tracking should be active
+        state = orchestrator.motion_handler.get_device_state("T8600P1234567890")
+        assert state is not None
+        assert state["is_active"] is True
 
         # Wait for timeout
         await asyncio.sleep(0.15)
 
-        # Recording should have stopped
-        assert not orchestrator.video_recorder.is_recording("T8600P1234567890")
+        # Motion tracking should have stopped
+        state = orchestrator.motion_handler.get_device_state("T8600P1234567890")
+        assert state is not None
+        assert state["is_active"] is False
 
         # Motion stopped webhook should have been sent
         assert mock_webhook.call_count >= 2

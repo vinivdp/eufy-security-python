@@ -12,16 +12,14 @@ from src.models.events import MotionDetectedEvent, MotionStoppedEvent
 
 
 @pytest.mark.asyncio
-async def test_motion_handler_start_recording(
-    mock_video_recorder,
+async def test_motion_handler_start_tracking(
     mock_workato_webhook,
     mock_error_logger,
     mock_websocket_client,
     sample_motion_event
 ):
-    """Test motion handler starts recording on motion detected"""
+    """Test motion handler starts tracking on motion detected"""
     handler = MotionAlarmHandler(
-        video_recorder=mock_video_recorder,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
         websocket_client=mock_websocket_client,
@@ -30,11 +28,6 @@ async def test_motion_handler_start_recording(
     )
 
     await handler.on_motion_detected(sample_motion_event)
-
-    # Verify recording was started
-    mock_video_recorder.start_recording.assert_called_once_with(
-        sample_motion_event["serialNumber"]
-    )
 
     # Verify webhook was sent
     mock_workato_webhook.send_event.assert_called_once()
@@ -47,15 +40,13 @@ async def test_motion_handler_start_recording(
 
 @pytest.mark.asyncio
 async def test_motion_handler_no_motion_timeout(
-    mock_video_recorder,
     mock_workato_webhook,
     mock_error_logger,
     mock_websocket_client,
     sample_motion_event
 ):
-    """Test motion handler stops recording after timeout"""
+    """Test motion handler stops tracking after timeout"""
     handler = MotionAlarmHandler(
-        video_recorder=mock_video_recorder,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
         websocket_client=mock_websocket_client,
@@ -68,11 +59,6 @@ async def test_motion_handler_no_motion_timeout(
     # Wait for timeout
     await asyncio.sleep(0.2)
 
-    # Verify recording was stopped
-    mock_video_recorder.stop_recording.assert_called_once_with(
-        sample_motion_event["serialNumber"]
-    )
-
     # Verify webhook was sent (motion stopped)
     assert mock_workato_webhook.send_event.call_count == 2
 
@@ -83,7 +69,6 @@ async def test_motion_handler_no_motion_timeout(
 
 @pytest.mark.asyncio
 async def test_motion_handler_reset_timeout_on_new_motion(
-    mock_video_recorder,
     mock_workato_webhook,
     mock_error_logger,
     mock_websocket_client,
@@ -91,7 +76,6 @@ async def test_motion_handler_reset_timeout_on_new_motion(
 ):
     """Test motion handler resets timeout when new motion detected"""
     handler = MotionAlarmHandler(
-        video_recorder=mock_video_recorder,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
         websocket_client=mock_websocket_client,
@@ -111,26 +95,28 @@ async def test_motion_handler_reset_timeout_on_new_motion(
     # Wait original timeout duration
     await asyncio.sleep(0.15)
 
-    # Should not have stopped yet (timer was reset)
-    mock_video_recorder.stop_recording.assert_not_called()
+    # Should only have sent one motion detected (timer was reset, not stopped)
+    assert mock_workato_webhook.send_event.call_count == 1
 
     # Wait for new timeout to expire
     await asyncio.sleep(0.1)
 
-    # Now it should stop
-    mock_video_recorder.stop_recording.assert_called_once()
+    # Now motion stopped should be sent
+    assert mock_workato_webhook.send_event.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_offline_handler_debounce(
     mock_workato_webhook,
     mock_error_logger,
+    mock_health_checker,
     sample_offline_event
 ):
     """Test offline handler debounces disconnect events"""
     handler = OfflineAlarmHandler(
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
+        health_checker=mock_health_checker,
         debounce_seconds=0.1,  # Short debounce for test
     )
 
@@ -150,12 +136,14 @@ async def test_offline_handler_debounce(
 async def test_offline_handler_reconnect_cancels_alert(
     mock_workato_webhook,
     mock_error_logger,
+    mock_health_checker,
     sample_offline_event
 ):
     """Test offline handler cancels alert if device reconnects"""
     handler = OfflineAlarmHandler(
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
+        health_checker=mock_health_checker,
         debounce_seconds=0.2,
     )
 
@@ -227,7 +215,6 @@ async def test_battery_handler_cooldown(
 
 @pytest.mark.asyncio
 async def test_get_device_state(
-    mock_video_recorder,
     mock_workato_webhook,
     mock_error_logger,
     mock_websocket_client,
@@ -235,7 +222,6 @@ async def test_get_device_state(
 ):
     """Test getting device state from motion handler"""
     handler = MotionAlarmHandler(
-        video_recorder=mock_video_recorder,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
         websocket_client=mock_websocket_client,
@@ -249,27 +235,28 @@ async def test_get_device_state(
     state = handler.get_device_state(device_sn)
     assert state is None
 
-    # Start recording
+    # Start tracking
     await handler.on_motion_detected(sample_motion_event)
 
     # Check state
     state = handler.get_device_state(device_sn)
     assert state is not None
     assert state["device_sn"] == device_sn
-    assert state["is_recording"] is True
-    assert state["video_url"] is not None
+    assert state["is_active"] is True
 
 
 @pytest.mark.asyncio
 async def test_get_offline_devices(
     mock_workato_webhook,
     mock_error_logger,
+    mock_health_checker,
     sample_offline_event
 ):
     """Test getting list of offline devices"""
     handler = OfflineAlarmHandler(
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
+        health_checker=mock_health_checker,
         debounce_seconds=0.1,
     )
 

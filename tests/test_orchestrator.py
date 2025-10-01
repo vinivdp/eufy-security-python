@@ -16,8 +16,7 @@ async def test_orchestrator_initialization(mock_config):
     assert orchestrator.workato_webhook is not None
     assert orchestrator.error_logger is not None
     assert orchestrator.websocket_client is not None
-    assert orchestrator.video_recorder is not None
-    assert orchestrator.storage_manager is not None
+    assert orchestrator.health_checker is not None
 
     # Verify all handlers are initialized
     assert orchestrator.motion_handler is not None

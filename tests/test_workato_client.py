@@ -56,8 +56,7 @@ async def test_send_event_model():
     )
 
     event = MotionDetectedEvent(
-        device_sn="T8600P1234567890",
-        video_url="http://example.com/video.mp4"
+        device_sn="T8600P1234567890"
     )
 
     with patch("aiohttp.ClientSession.post") as mock_post:
@@ -74,7 +73,6 @@ async def test_send_event_model():
 
         assert payload["event"] == "motion_detected"
         assert payload["device_sn"] == "T8600P1234567890"
-        assert payload["video_url"] == "http://example.com/video.mp4"
 
 
 @pytest.mark.asyncio

@@ -109,13 +109,22 @@ def mock_error_logger():
 
 @pytest.fixture
 def mock_video_recorder():
-    """Create a mock VideoRecorder"""
+    """Create a mock VideoRecorder (deprecated)"""
     recorder = AsyncMock()
     recorder.start_recording = AsyncMock(return_value="http://test.example.com/recordings/test.mp4")
     recorder.stop_recording = AsyncMock(return_value=("http://test.example.com/recordings/test.mp4", 60))
     recorder.is_recording = MagicMock(return_value=False)
     recorder.get_recording_info = MagicMock(return_value=None)
     return recorder
+
+
+@pytest.fixture
+def mock_health_checker():
+    """Create a mock DeviceHealthChecker"""
+    checker = AsyncMock()
+    checker.check_device_health = AsyncMock(return_value=True)
+    checker.get_last_check_result = MagicMock(return_value=(True, datetime.now()))
+    return checker
 
 
 @pytest.fixture
