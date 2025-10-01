@@ -23,7 +23,8 @@ def test_default_config():
     assert config.server.host == "0.0.0.0"
     assert config.server.port == 10000
     assert config.eufy.websocket_url == "ws://127.0.0.1:3000/ws"
-    assert config.recording.max_duration_seconds == 900
+    assert config.recording.storage_path == "/mnt/recordings"
+    assert config.recording.retention_days == 90
     assert config.alerts.battery.cooldown_hours == 24
     assert config.alerts.offline.polling_interval_minutes == 5
     assert config.alerts.offline.failure_threshold == 3
@@ -44,8 +45,8 @@ def test_load_config_from_yaml(tmp_path: Path):
             "reconnect_delay": 10.0
         },
         "recording": {
-            "max_duration_seconds": 600,
-            "storage_path": "/custom/path"
+            "storage_path": "/custom/path",
+            "retention_days": 30
         },
         "alerts": {
             "battery": {
@@ -69,8 +70,8 @@ def test_load_config_from_yaml(tmp_path: Path):
     assert config.server.public_url == "http://custom.example.com"
     assert config.eufy.websocket_url == "ws://custom:3000/ws"
     assert config.eufy.reconnect_delay == 10.0
-    assert config.recording.max_duration_seconds == 600
     assert config.recording.storage_path == "/custom/path"
+    assert config.recording.retention_days == 30
     assert config.alerts.battery.cooldown_hours == 48
     assert config.alerts.offline.polling_interval_minutes == 10
     assert config.alerts.offline.failure_threshold == 5
@@ -113,7 +114,8 @@ def test_load_config_nonexistent_file():
 
     # Should return default config
     assert config.server.port == 10000
-    assert config.recording.max_duration_seconds == 900
+    assert config.recording.storage_path == "/mnt/recordings"
+    assert config.recording.retention_days == 90
 
 
 def test_nested_alerts_config():

@@ -24,13 +24,8 @@ class EufyConfig(BaseSettings):
 
 class RecordingConfig(BaseSettings):
     """Video recording configuration"""
-    max_duration_seconds: int = 900
-    motion_timeout_seconds: int = 60
-    snooze_duration_seconds: int = 3600
     storage_path: str = "/mnt/recordings"
     retention_days: int = 90
-    video_codec: str = "libx264"
-    video_quality: str = "medium"
 
 
 class WorkatoConfig(BaseSettings):
@@ -40,23 +35,10 @@ class WorkatoConfig(BaseSettings):
     rate_limit_per_second: int = 20
 
 
-class RetryConfig(BaseSettings):
-    """Retry configuration"""
-    max_attempts: int = 3
-    initial_delay: float = 1.0
-    backoff_multiplier: float = 2.0
-
-
 class ErrorLoggingConfig(BaseSettings):
     """Error logging configuration"""
     send_to_workato: bool = True
     keep_in_memory: int = 100
-
-
-class StorageConfig(BaseSettings):
-    """Storage management configuration"""
-    cleanup_schedule: str = "0 3 * * *"
-    min_free_space_gb: int = 5
 
 
 class BatteryAlertConfig(BaseSettings):
@@ -105,9 +87,7 @@ class AppConfig(BaseSettings):
     eufy: EufyConfig = Field(default_factory=EufyConfig)
     recording: RecordingConfig = Field(default_factory=RecordingConfig)
     workato: WorkatoConfig = Field(default_factory=WorkatoConfig)
-    retry: RetryConfig = Field(default_factory=RetryConfig)
     error_logging: ErrorLoggingConfig = Field(default_factory=ErrorLoggingConfig)
-    storage: StorageConfig = Field(default_factory=StorageConfig)
     motion: MotionConfig = Field(default_factory=MotionConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -152,9 +132,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         "eufy": EufyConfig(**yaml_config.get("eufy", {})),
         "recording": RecordingConfig(**yaml_config.get("recording", {})),
         "workato": WorkatoConfig(**yaml_config.get("workato", {})),
-        "retry": RetryConfig(**yaml_config.get("retry", {})),
         "error_logging": ErrorLoggingConfig(**yaml_config.get("error_logging", {})),
-        "storage": StorageConfig(**yaml_config.get("storage", {})),
         "motion": MotionConfig(**yaml_config.get("motion", {})),
         "alerts": alerts_config,
         "logging": LoggingConfig(**yaml_config.get("logging", {})),

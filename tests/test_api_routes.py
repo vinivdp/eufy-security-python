@@ -34,8 +34,6 @@ def mock_orchestrator_for_routes(mock_config):
         "offline_devices": 0,
     })
     orch.motion_handler = MagicMock()
-    orch.offline_handler = MagicMock()
-    orch.battery_handler = MagicMock()
     orch.error_logger = MagicMock()
     return orch
 
@@ -82,37 +80,6 @@ def test_health_check_with_orchestrator_stopped(client, mock_orchestrator_for_ro
 
 
 @pytest.mark.asyncio
-async def test_get_devices_status(client, mock_orchestrator_for_routes):
-    """Test getting devices status"""
-    mock_orchestrator_for_routes.motion_handler.device_states = {
-        "TEST123": MagicMock()
-    }
-    mock_orchestrator_for_routes.motion_handler.get_device_state = MagicMock(
-        return_value={
-            "device_sn": "TEST123",
-            "is_active": True,
-        }
-    )
-    mock_orchestrator_for_routes.offline_handler.get_offline_devices = MagicMock(
-        return_value=[]
-    )
-    mock_orchestrator_for_routes.battery_handler.get_battery_alerts = MagicMock(
-        return_value=[]
-    )
-
-    set_orchestrator(mock_orchestrator_for_routes)
-
-    response = client.get("/devices")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "motion_states" in data
-    assert "offline_devices" in data
-    assert "battery_alerts" in data
-    assert "TEST123" in data["motion_states"]
-
-
-@pytest.mark.asyncio
 async def test_get_recent_errors(client, mock_orchestrator_for_routes):
     """Test getting recent errors"""
     mock_errors = [
@@ -156,7 +123,6 @@ def test_endpoints_without_orchestrator(client):
     set_orchestrator(None)
 
     endpoints = [
-        ("/devices", "get"),
         ("/errors", "get"),
     ]
 

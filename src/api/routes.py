@@ -38,32 +38,6 @@ async def health_check():
     }
 
 
-@router.get("/devices")
-async def get_devices_status():
-    """Get status of all devices"""
-    if not orchestrator:
-        raise HTTPException(status_code=503, detail="Service not ready")
-
-    # Get motion states
-    motion_states = {}
-    for device_sn in orchestrator.motion_handler.device_states:
-        state = orchestrator.motion_handler.get_device_state(device_sn)
-        if state:
-            motion_states[device_sn] = state
-
-    # Get offline devices
-    offline_devices = orchestrator.offline_handler.get_offline_devices()
-
-    # Get battery alerts
-    battery_alerts = orchestrator.battery_handler.get_battery_alerts()
-
-    return {
-        "motion_states": motion_states,
-        "offline_devices": offline_devices,
-        "battery_alerts": battery_alerts,
-    }
-
-
 @router.get("/errors")
 async def get_recent_errors(limit: int = Query(10, le=50)):
     """

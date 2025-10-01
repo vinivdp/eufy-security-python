@@ -13,9 +13,7 @@ from src.utils.config import (
     EufyConfig,
     RecordingConfig,
     WorkatoConfig,
-    RetryConfig,
     ErrorLoggingConfig,
-    StorageConfig,
     MotionConfig,
     AlertsConfig,
     BatteryAlertConfig,
@@ -40,31 +38,17 @@ def mock_config() -> AppConfig:
             heartbeat_interval=10.0
         ),
         recording=RecordingConfig(
-            max_duration_seconds=60,
-            motion_timeout_seconds=5,
-            snooze_duration_seconds=30,
             storage_path="./test_recordings",
-            retention_days=7,
-            video_codec="libx264",
-            video_quality="medium"
+            retention_days=7
         ),
         workato=WorkatoConfig(
             webhook_url="https://test.workato.com/webhook",
             timeout_seconds=10,
             rate_limit_per_second=10
         ),
-        retry=RetryConfig(
-            max_attempts=2,
-            initial_delay=0.1,
-            backoff_multiplier=2.0
-        ),
         error_logging=ErrorLoggingConfig(
             send_to_workato=False,
             keep_in_memory=10
-        ),
-        storage=StorageConfig(
-            cleanup_schedule="0 3 * * *",
-            min_free_space_gb=1
         ),
         motion=MotionConfig(
             state_timeout_minutes=60
