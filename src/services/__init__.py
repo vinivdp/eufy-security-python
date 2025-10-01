@@ -1,8 +1,7 @@
 """Service modules"""
 
-from .video_recorder import VideoRecorder
 from .workato_client import WorkatoWebhook
 from .error_logger import ErrorLogger
-from .storage_manager import StorageManager
+from .device_health_checker import DeviceHealthChecker
 
-__all__ = ["VideoRecorder", "WorkatoWebhook", "ErrorLogger", "StorageManager"]
+__all__ = ["WorkatoWebhook", "ErrorLogger", "DeviceHealthChecker"]
