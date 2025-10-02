@@ -170,6 +170,8 @@ class DeviceHealthChecker:
             device_sn: Device serial number
             slack_channel: Slack channel for alerts
         """
+        logger.info(f"🔍 Checking health for {device_sn}...")
+
         # Skip health check if device is offline and within 24-hour cooldown
         if device_sn in self.offline_devices_timestamps:
             last_alert_time = self.offline_devices_timestamps[device_sn]
@@ -204,7 +206,7 @@ class DeviceHealthChecker:
 
             if response and response.get("success"):
                 # Device responded - it's online
-                logger.debug(f"✅ Health check success for {device_sn}")
+                logger.info(f"✅ Health check SUCCESS for {device_sn}")
                 await self._handle_online_response(device_sn, slack_channel, response)
             else:
                 # Command failed - log the error code if available
@@ -247,10 +249,12 @@ class DeviceHealthChecker:
         battery_level = properties.get("battery")
 
         if battery_level is not None:
-            logger.debug(f"Battery level for {device_sn}: {battery_level}%")
+            logger.info(f"🔋 Battery level for {device_sn}: {battery_level}%")
 
             if battery_level < self.battery_threshold_percent:
                 await self._send_low_battery_alert(device_sn, slack_channel, battery_level)
+        else:
+            logger.warning(f"⚠️  No battery data returned for {device_sn}")
 
     async def _handle_failure(self, device_sn: str, slack_channel: str, error_code: str = "unknown") -> None:
         """
