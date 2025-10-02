@@ -7,10 +7,10 @@ from typing import Optional
 from .clients.websocket_client import WebSocketClient
 from .services.workato_client import WorkatoWebhook
 from .services.error_logger import ErrorLogger
-from .services.device_health_checker import DeviceHealthChecker
 from .services.camera_registry import CameraRegistry
 from .services.state_timeout_checker import StateTimeoutChecker
 from .handlers.motion_handler import MotionAlarmHandler
+from .handlers.lookup_failure_handler import LookupFailureHandler
 from .utils.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -20,11 +20,11 @@ class EventOrchestrator:
     """
     Central coordinator for all event handlers and services
 
-    New architecture:
+    Architecture:
     - Camera registry loaded from CSV
     - Motion detection with state machine (closed→open, timeout→closed)
-    - Polling-based health monitoring (battery + offline)
-    - Only listens to motion_detected events
+    - Event-based offline detection (lookup failure events)
+    - Listens to motion_detected and lookup failure events
     """
 
     def __init__(self, config: AppConfig):
@@ -64,22 +64,16 @@ class EventOrchestrator:
         # Camera registry
         self.camera_registry = CameraRegistry(registry_path="config/cameras.txt")
 
-        # Health checker (polling-based)
-        self.health_checker = DeviceHealthChecker(
-            websocket_client=self.websocket_client,
+        # Initialize handlers
+        logger.info("Initializing event handlers...")
+
+        self.motion_handler = MotionAlarmHandler(
             camera_registry=self.camera_registry,
             workato_webhook=self.workato_webhook,
             error_logger=self.error_logger,
-            polling_interval_minutes=config.alerts.offline.polling_interval_minutes,
-            failure_threshold=config.alerts.offline.failure_threshold,
-            battery_threshold_percent=config.alerts.offline.battery_threshold_percent,
-            battery_cooldown_hours=config.alerts.battery.cooldown_hours,
         )
 
-        # Initialize motion handler
-        logger.info("Initializing motion handler...")
-
-        self.motion_handler = MotionAlarmHandler(
+        self.lookup_failure_handler = LookupFailureHandler(
             camera_registry=self.camera_registry,
             workato_webhook=self.workato_webhook,
             error_logger=self.error_logger,
@@ -115,7 +109,7 @@ class EventOrchestrator:
             logger.error(f"Failed to load camera registry: {e}")
             raise
 
-        # Register event handlers (ONLY motion_detected)
+        # Register event handlers
         self._register_event_handlers()
 
         # Start WebSocket client
@@ -134,8 +128,7 @@ class EventOrchestrator:
         # Start background tasks
         asyncio.create_task(self._run_websocket_listener())
 
-        # Start polling services
-        await self.health_checker.start()
+        # Start state timeout checker
         await self.state_timeout_checker.start()
 
         logger.info("✅ Orchestrator started successfully")
@@ -149,7 +142,6 @@ class EventOrchestrator:
         logger.info("🛑 Stopping Eufy Security Integration")
 
         # Stop background services
-        await self.health_checker.stop()
         await self.state_timeout_checker.stop()
 
         # Disconnect WebSocket
@@ -161,10 +153,11 @@ class EventOrchestrator:
         """Register event handlers with WebSocket client"""
         logger.info("Registering event handlers...")
 
-        # ONLY listen to motion detected events
+        # Listen to motion detected and lookup failure events
         self.websocket_client.on("motion detected", self.motion_handler.on_motion_detected)
+        self.websocket_client.on("lookup failure", self.lookup_failure_handler.on_lookup_failure)
 
-        logger.info("✅ Event handler registered (motion_detected only)")
+        logger.info("✅ Event handlers registered (motion_detected, lookup_failure)")
 
     async def _run_websocket_listener(self) -> None:
         """Run WebSocket listener loop"""
@@ -183,14 +176,12 @@ class EventOrchestrator:
         """Get orchestrator status"""
         cameras_count = len(self.camera_registry.cameras)
         open_cameras = len([c for c in self.camera_registry.cameras.values() if c.state == "open"])
-        offline_cameras = len(self.health_checker.offline_devices_timestamps)
 
         return {
             "running": self._running,
             "websocket_connected": self.websocket_client.ws is not None,
             "total_cameras": cameras_count,
             "open_cameras": open_cameras,
-            "offline_cameras": offline_cameras,
         }
 
     async def _route_event(self, event: dict) -> None:
