@@ -132,9 +132,9 @@ async def test_check_camera_health_success_regular_camera(health_checker, mock_w
 @pytest.mark.asyncio
 async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client):
     """Test successful health check for standalone camera (T8B0* or T8150*)"""
-    # Mock responses: get LED state, set LED (P2P check), get battery
+    # Mock responses: get LED state, toggle LED (P2P check), restore LED, get battery
     mock_websocket_client.send_command.side_effect = [
-        # First call: get status LED state
+        # First call: get status LED state (returns True)
         {
             "type": "result",
             "success": True,
@@ -144,12 +144,17 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
                 }
             }
         },
-        # Second call: set status LED (forces P2P connection)
+        # Second call: toggle status LED to False (forces P2P connection)
         {
             "type": "result",
             "success": True
         },
-        # Third call: get battery
+        # Third call: restore status LED to True
+        {
+            "type": "result",
+            "success": True
+        },
+        # Fourth call: get battery
         {
             "type": "result",
             "success": True,
@@ -163,40 +168,46 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
 
-    # Should have called send_command 3 times
-    assert mock_websocket_client.send_command.call_count == 3
+    # Should have called send_command 4 times
+    assert mock_websocket_client.send_command.call_count == 4
 
     # First call: get status LED
     first_call = mock_websocket_client.send_command.call_args_list[0]
     assert first_call[0][0] == "device.get_properties"
     assert first_call[0][1]["properties"] == ["statusLed"]
 
-    # Second call: set status LED with 25s timeout
+    # Second call: toggle status LED with 25s timeout (True -> False)
     second_call = mock_websocket_client.send_command.call_args_list[1]
     assert second_call[0][0] == "device.set_status_led"
     assert second_call[0][1]["serialNumber"] == "T8B00511242309F6"
+    assert second_call[0][1]["value"] is False  # Toggled to opposite
     assert second_call.kwargs["timeout"] == 25.0
 
-    # Third call: get battery
+    # Third call: restore status LED (False -> True)
     third_call = mock_websocket_client.send_command.call_args_list[2]
-    assert third_call[0][0] == "device.get_properties"
-    assert third_call[0][1]["properties"] == ["battery"]
+    assert third_call[0][0] == "device.set_status_led"
+    assert third_call[0][1]["value"] is True  # Restored to original
+
+    # Fourth call: get battery
+    fourth_call = mock_websocket_client.send_command.call_args_list[3]
+    assert fourth_call[0][0] == "device.get_properties"
+    assert fourth_call[0][1]["properties"] == ["battery"]
 
 
 @pytest.mark.asyncio
 async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook):
     """Test health check when standalone camera set_status_led fails (camera offline)"""
-    # Mock: get LED succeeds (cached), but set LED fails (requires P2P)
+    # Mock: get LED succeeds (cached), but toggle LED fails (requires P2P)
     mock_websocket_client.send_command.side_effect = [
         # First health check
         {"type": "result", "success": True, "result": {"properties": {"statusLed": True}}},  # get LED
-        {"type": "result", "success": False, "errorCode": "device_not_found"},  # set LED fails
+        {"type": "result", "success": False, "errorCode": "device_not_found"},  # toggle LED fails
         # Second health check
         {"type": "result", "success": True, "result": {"properties": {"statusLed": True}}},  # get LED
-        {"type": "result", "success": False, "errorCode": "device_not_found"},  # set LED fails
+        {"type": "result", "success": False, "errorCode": "device_not_found"},  # toggle LED fails
         # Third health check
         {"type": "result", "success": True, "result": {"properties": {"statusLed": True}}},  # get LED
-        {"type": "result", "success": False, "errorCode": "device_not_found"},  # set LED fails
+        {"type": "result", "success": False, "errorCode": "device_not_found"},  # toggle LED fails
     ]
 
     # First two failures - should NOT send alert
@@ -212,7 +223,7 @@ async def test_check_camera_health_standalone_camera_disconnected(health_checker
     assert "T8B00511242309F6" in health_checker.offline_devices_timestamps
     assert health_checker.failure_counts["T8B00511242309F6"] == 3
 
-    # Should have called send_command 6 times (2 per health check: get LED + set LED)
+    # Should have called send_command 6 times (2 per health check: get LED + toggle LED)
     assert mock_websocket_client.send_command.call_count == 6
 
 

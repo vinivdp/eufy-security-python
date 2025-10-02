@@ -1,11 +1,11 @@
 """Device health checker service - polling-based battery and offline monitoring"""
 
-# Force rebuild - v3
+# Force rebuild - v4
 import asyncio
 import json
 import logging
 
-print("🔥 DEVICE_HEALTH_CHECKER MODULE LOADED - V3 🔥")
+print("🔥 DEVICE_HEALTH_CHECKER MODULE LOADED - V4 🔥")
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -228,13 +228,16 @@ class DeviceHealthChecker:
                 # Get current LED state (default to True if not found)
                 current_led_state = led_response.get("result", {}).get("properties", {}).get("statusLed", True)
 
-                # Toggle status LED (set to same value to avoid actually changing it)
+                # Toggle status LED (force change to opposite value)
                 # This requires P2P connection - will fail if camera is offline
+                toggled_led_state = not current_led_state
+                logger.debug(f"📡 Toggling LED from {current_led_state} to {toggled_led_state}")
+
                 set_led_response = await self.websocket_client.send_command(
                     "device.set_status_led",
                     {
                         "serialNumber": device_sn,
-                        "value": current_led_state  # Set to same value
+                        "value": toggled_led_state  # Toggle to opposite value
                     },
                     wait_response=True,
                     timeout=25.0  # Allow time for P2P timeout (~20s)
@@ -245,6 +248,20 @@ class DeviceHealthChecker:
                     logger.warning(f"📴 Status LED command failed for {device_sn}: {error_code}")
                     await self._handle_failure(device_sn, slack_channel, error_code)
                     return
+
+                # P2P connection successful - restore LED to original state
+                logger.debug(f"📡 Restoring LED to original state: {current_led_state}")
+                restore_led_response = await self.websocket_client.send_command(
+                    "device.set_status_led",
+                    {
+                        "serialNumber": device_sn,
+                        "value": current_led_state  # Restore original state
+                    },
+                    wait_response=True,
+                    timeout=10.0
+                )
+                if not restore_led_response or not restore_led_response.get("success"):
+                    logger.warning(f"⚠️  Failed to restore LED state for {device_sn}")
 
                 # Camera is online - get battery level
                 response = await self.websocket_client.send_command(
