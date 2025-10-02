@@ -204,11 +204,12 @@ class DeviceHealthChecker:
 
             if response and response.get("success"):
                 # Device responded - it's online
+                logger.debug(f"✅ Health check success for {device_sn}")
                 await self._handle_online_response(device_sn, slack_channel, response)
             else:
                 # Command failed - log the error code if available
                 error_code = response.get("errorCode") if response else "no_response"
-                logger.debug(f"Health check failed for {device_sn}: {error_code}")
+                logger.info(f"❌ Health check failed for {device_sn}: error_code={error_code}, response={response}")
                 await self._handle_failure(device_sn, slack_channel, error_code)
 
         except asyncio.TimeoutError:
