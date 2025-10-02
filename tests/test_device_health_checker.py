@@ -132,15 +132,12 @@ async def test_check_camera_health_success_regular_camera(health_checker, mock_w
 @pytest.mark.asyncio
 async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client):
     """Test successful health check for standalone camera (T8B0* or T8150*)"""
-    # Mock station.is_connected and device.get_properties responses
+    # Mock device.snooze and device.get_properties responses
     mock_websocket_client.send_command.side_effect = [
-        # First call: station.is_connected returns True
+        # First call: device.snooze succeeds (camera is online)
         {
             "type": "result",
-            "success": True,
-            "result": {
-                "state": True
-            }
+            "success": True
         },
         # Second call: device.get_properties for battery
         {
@@ -156,13 +153,14 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
 
-    # Should have called send_command twice (station.is_connected + device.get_properties)
+    # Should have called send_command twice (device.snooze + device.get_properties)
     assert mock_websocket_client.send_command.call_count == 2
 
-    # First call should be station.is_connected
+    # First call should be device.snooze
     first_call = mock_websocket_client.send_command.call_args_list[0]
-    assert first_call[0][0] == "station.is_connected"
+    assert first_call[0][0] == "device.snooze"
     assert first_call[0][1]["serialNumber"] == "T8B00511242309F6"
+    assert first_call[0][1]["value"] == 5
 
     # Second call should be device.get_properties for battery
     second_call = mock_websocket_client.send_command.call_args_list[1]
@@ -172,14 +170,12 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
 @pytest.mark.asyncio
 async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook):
-    """Test health check when standalone camera station is not connected"""
-    # Mock station.is_connected returns False (station not connected)
+    """Test health check when standalone camera snooze fails (camera offline)"""
+    # Mock device.snooze returns failure (camera not responding)
     mock_websocket_client.send_command.return_value = {
         "type": "result",
-        "success": True,
-        "result": {
-            "state": False  # Not connected
-        }
+        "success": False,
+        "errorCode": "device_not_found"
     }
 
     # First two failures - should NOT send alert
@@ -195,12 +191,12 @@ async def test_check_camera_health_standalone_camera_disconnected(health_checker
     assert "T8B00511242309F6" in health_checker.offline_devices_timestamps
     assert health_checker.failure_counts["T8B00511242309F6"] == 3
 
-    # Should have called station.is_connected 3 times (one per health check)
+    # Should have called device.snooze 3 times (one per health check)
     assert mock_websocket_client.send_command.call_count == 3
 
-    # All calls should be station.is_connected
+    # All calls should be device.snooze
     for call in mock_websocket_client.send_command.call_args_list:
-        assert call[0][0] == "station.is_connected"
+        assert call[0][0] == "device.snooze"
         assert call[0][1]["serialNumber"] == "T8B00511242309F6"
 
 
