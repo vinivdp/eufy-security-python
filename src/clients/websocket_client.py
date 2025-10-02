@@ -193,6 +193,10 @@ class WebSocketClient:
 
     async def _handle_event(self, event: dict) -> None:
         """Handle incoming WebSocket event or response"""
+        # Log ALL raw messages to debug event reception
+        msg_type = event.get("type", "unknown")
+        logger.debug(f"📨 Raw WebSocket message: type={msg_type}")
+
         # Handle command responses (type: "result")
         if event.get("type") == "result":
             message_id = event.get("messageId")

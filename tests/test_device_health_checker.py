@@ -1,11 +1,8 @@
 """Tests for DeviceHealthChecker"""
 
-import asyncio
-import json
 import pytest
-from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 from src.services.device_health_checker import DeviceHealthChecker, OFFLINE_DEVICES_FILE
 from src.services.camera_registry import get_brasilia_now
@@ -109,27 +106,89 @@ def test_save_and_load_offline_devices(health_checker):
 
 
 @pytest.mark.asyncio
-async def test_check_camera_health_success(health_checker, mock_websocket_client):
-    """Test successful health check"""
-    # Mock successful response with state=1 (online)
+async def test_check_camera_health_success_regular_camera(health_checker, mock_websocket_client):
+    """Test successful health check for regular camera (not standalone)"""
+    # Mock successful response for regular camera
     mock_websocket_client.send_command.return_value = {
         "type": "result",
         "success": True,
         "result": {
             "properties": {
-                "battery": 85,
-                "state": 1
+                "battery": 85
             }
         }
     }
 
-    await health_checker._check_camera_health("TEST123", "test-channel")
+    await health_checker._check_camera_health("T8410", "test-channel")
 
-    # Should have called send_command once
+    # Should have called send_command once (device.get_properties)
     mock_websocket_client.send_command.assert_called_once()
     call_args = mock_websocket_client.send_command.call_args
+    assert call_args[0][0] == "device.get_properties"
     assert call_args.kwargs["wait_response"] is True
     assert call_args.kwargs["timeout"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client):
+    """Test successful health check for standalone camera (T8B0* or T8150*)"""
+    # Mock station.is_connected returning connected
+    # Then mock device.get_properties for battery
+    mock_websocket_client.send_command.side_effect = [
+        {
+            "type": "result",
+            "success": True,
+            "result": {"connected": True}
+        },
+        {
+            "type": "result",
+            "success": True,
+            "result": {
+                "properties": {
+                    "battery": 85
+                }
+            }
+        }
+    ]
+
+    await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
+
+    # Should have called send_command twice (station.is_connected + device.get_properties)
+    assert mock_websocket_client.send_command.call_count == 2
+
+    # First call: station.is_connected
+    first_call = mock_websocket_client.send_command.call_args_list[0]
+    assert first_call[0][0] == "station.is_connected"
+    assert first_call[0][1]["serialNumber"] == "T8B00511242309F6"
+
+    # Second call: device.get_properties
+    second_call = mock_websocket_client.send_command.call_args_list[1]
+    assert second_call[0][0] == "device.get_properties"
+    assert second_call[0][1]["serialNumber"] == "T8B00511242309F6"
+
+
+@pytest.mark.asyncio
+async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook):
+    """Test health check when standalone camera is disconnected"""
+    # Mock station.is_connected returning disconnected
+    mock_websocket_client.send_command.return_value = {
+        "type": "result",
+        "success": True,
+        "result": {"connected": False}
+    }
+
+    # First two failures - should NOT send alert
+    await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
+    await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
+    mock_workato_webhook.send_event.assert_not_called()
+
+    # Third failure - should send alert
+    await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
+    mock_workato_webhook.send_event.assert_called_once()
+
+    # Device should be in offline_devices_timestamps
+    assert "T8B00511242309F6" in health_checker.offline_devices_timestamps
+    assert health_checker.failure_counts["T8B00511242309F6"] == 3
 
 
 @pytest.mark.asyncio
@@ -171,28 +230,27 @@ async def test_check_camera_health_skip_offline_cooldown(health_checker, mock_we
 @pytest.mark.asyncio
 async def test_check_camera_health_retry_after_24h(health_checker, mock_websocket_client):
     """Test health check retries device after 24 hours"""
-    # Mark device as offline 25 hours ago
-    health_checker.offline_devices_timestamps["OLD_OFFLINE"] = get_brasilia_now() - timedelta(hours=25)
+    # Mark device as offline 25 hours ago (using a regular camera serial)
+    health_checker.offline_devices_timestamps["T8410OLD"] = get_brasilia_now() - timedelta(hours=25)
 
-    # Mock successful response with state=1 (device is back online)
+    # Mock successful response (device is back online)
     mock_websocket_client.send_command.return_value = {
         "type": "result",
         "success": True,
         "result": {
             "properties": {
-                "battery": 90,
-                "state": 1
+                "battery": 90
             }
         }
     }
 
-    await health_checker._check_camera_health("OLD_OFFLINE", "test-channel")
+    await health_checker._check_camera_health("T8410OLD", "test-channel")
 
     # Should have called send_command once
     mock_websocket_client.send_command.assert_called_once()
 
     # Device should be removed from offline list
-    assert "OLD_OFFLINE" not in health_checker.offline_devices_timestamps
+    assert "T8410OLD" not in health_checker.offline_devices_timestamps
 
 
 @pytest.mark.asyncio

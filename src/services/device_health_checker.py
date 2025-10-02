@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -11,6 +11,9 @@ from ..models.events import LowBatteryEvent, CameraOfflineEvent
 from ..services.camera_registry import CameraRegistry, get_brasilia_now
 from ..services.workato_client import WorkatoWebhook
 from ..services.error_logger import ErrorLogger
+
+if TYPE_CHECKING:
+    from ..clients.websocket_client import WebSocketClient
 
 logger = logging.getLogger(__name__)
 
@@ -193,42 +196,74 @@ class DeviceHealthChecker:
                 self.failure_counts.pop(device_sn, None)
 
         try:
-            # Query device properties (battery level)
-            response = await self.websocket_client.send_command(
-                "device.get_properties",
-                {
-                    "serialNumber": device_sn,
-                    "properties": ["battery"]
-                },
-                wait_response=True,
-                timeout=10.0
-            )
+            # Standalone cameras (4G Starlight T8B0*, WiFi SoloCam T8150*) act as their own stations
+            # For these, we need to check station P2P connection status instead of device properties
+            # because device.get_properties returns cached data even when P2P connection is down
+            is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
-            # Log the full response to debug why offline cameras return battery data
-            logger.info(f"📡 Full response for {device_sn}: {response}")
+            if is_standalone:
+                # Check station P2P connection status for standalone cameras
+                response = await self.websocket_client.send_command(
+                    "station.is_connected",
+                    {
+                        "serialNumber": device_sn
+                    },
+                    wait_response=True,
+                    timeout=10.0
+                )
 
-            if response and response.get("success"):
-                # API returned success, but check the 'state' property to verify device is actually connected
-                # state: 1 = online/connected, other values may indicate offline/disconnected
-                result = response.get("result", {})
-                properties = result.get("properties", {})
-                state = properties.get("state")
+                if response and response.get("success"):
+                    is_connected = response.get("result", {}).get("connected", False)
 
-                logger.info(f"🔍 Device state for {device_sn}: {state}")
+                    if is_connected:
+                        # Station is connected via P2P - camera is online
+                        # Now query battery level
+                        battery_response = await self.websocket_client.send_command(
+                            "device.get_properties",
+                            {
+                                "serialNumber": device_sn,
+                                "properties": ["battery"]
+                            },
+                            wait_response=True,
+                            timeout=10.0
+                        )
 
-                if state == 1:
-                    # Device is actually online and connected
+                        if battery_response and battery_response.get("success"):
+                            logger.info(f"✅ Health check SUCCESS for {device_sn}")
+                            await self._handle_online_response(device_sn, slack_channel, battery_response)
+                        else:
+                            # Connected but failed to get battery - treat as online but log warning
+                            logger.warning(f"⚠️ Station connected but battery query failed for {device_sn}")
+                            await self._handle_online_response(device_sn, slack_channel, {"result": {"properties": {}}})
+                    else:
+                        # Station not connected via P2P - camera is offline
+                        logger.warning(f"📴 Station NOT connected for {device_sn} - camera is offline")
+                        await self._handle_failure(device_sn, slack_channel, "station_disconnected")
+                else:
+                    # Command failed
+                    error_code = response.get("errorCode") if response else "no_response"
+                    logger.warning(f"❌ Station connection check failed for {device_sn}: error_code={error_code}")
+                    await self._handle_failure(device_sn, slack_channel, error_code)
+            else:
+                # Regular cameras connected through HomeBase - use device.get_properties
+                response = await self.websocket_client.send_command(
+                    "device.get_properties",
+                    {
+                        "serialNumber": device_sn,
+                        "properties": ["battery"]
+                    },
+                    wait_response=True,
+                    timeout=10.0
+                )
+
+                if response and response.get("success"):
                     logger.info(f"✅ Health check SUCCESS for {device_sn}")
                     await self._handle_online_response(device_sn, slack_channel, response)
                 else:
-                    # Device returned cached data but is not connected
-                    logger.warning(f"📴 Camera {device_sn} returned cached data (state={state}) but is offline")
-                    await self._handle_failure(device_sn, slack_channel, f"state_{state}")
-            else:
-                # Command failed - log the error code if available
-                error_code = response.get("errorCode") if response else "no_response"
-                logger.info(f"❌ Health check failed for {device_sn}: error_code={error_code}")
-                await self._handle_failure(device_sn, slack_channel, error_code)
+                    # Command failed
+                    error_code = response.get("errorCode") if response else "no_response"
+                    logger.warning(f"❌ Health check failed for {device_sn}: error_code={error_code}")
+                    await self._handle_failure(device_sn, slack_channel, error_code)
 
         except asyncio.TimeoutError:
             logger.warning(f"⏱️  Health check timeout for {device_sn}")
