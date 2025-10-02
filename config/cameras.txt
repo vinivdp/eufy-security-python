@@ -1,8 +1,8 @@
 Camera_SN,Slack_channel,latest_activity,state
-T8150P40241800E7,condominio-rochavera,2025-10-01T23:40:47.900141-03:00,open
+T8150P40241800E7,condominio-rochavera,2025-10-02T00:16:37.441611-03:00,open
 T8150P4024180086,condominio-platina,2025-09-10T11:37:33.844000-03:00,closed
 T8150P402418041D,condominio-vistafarialima,2025-09-30T07:45:39.535000-03:00,closed
-T8B005112336016A,condominio-lemonde,2025-10-01T23:40:47.364850-03:00,open
+T8B005112336016A,condominio-lemonde,2025-10-02T00:16:36.909869-03:00,open
 T8B0051123360845,condominio-eztowers,2025-09-30T18:18:15.506000-03:00,closed
 T8150P40231504ED,condominio-paulista-2064,2025-09-30T06:20:22.730000-03:00,closed
 T8150P402315021D,condominio-rochavera,2025-09-27T13:57:23.532000-03:00,closed
