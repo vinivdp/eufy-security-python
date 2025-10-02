@@ -132,7 +132,7 @@ async def test_check_camera_health_success_regular_camera(health_checker, mock_w
 @pytest.mark.asyncio
 async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client):
     """Test successful health check for standalone camera (T8B0* or T8150*)"""
-    # Mock station.connect succeeding
+    # Mock driver.poll_refresh succeeding
     # Then mock device.get_properties for battery
     mock_websocket_client.send_command.side_effect = [
         {
@@ -152,13 +152,12 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
 
-    # Should have called send_command twice (station.connect + device.get_properties)
+    # Should have called send_command twice (driver.poll_refresh + device.get_properties)
     assert mock_websocket_client.send_command.call_count == 2
 
-    # First call: station.connect
+    # First call: driver.poll_refresh
     first_call = mock_websocket_client.send_command.call_args_list[0]
-    assert first_call[0][0] == "station.connect"
-    assert first_call[0][1]["serialNumber"] == "T8B00511242309F6"
+    assert first_call[0][0] == "driver.poll_refresh"
 
     # Second call: device.get_properties
     second_call = mock_websocket_client.send_command.call_args_list[1]
@@ -168,13 +167,16 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
 @pytest.mark.asyncio
 async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook):
-    """Test health check when standalone camera fails to connect"""
-    # Mock station.connect failing
-    mock_websocket_client.send_command.return_value = {
-        "type": "result",
-        "success": False,
-        "errorCode": "connection_error"
-    }
+    """Test health check when standalone camera is offline"""
+    # Mock driver.poll_refresh succeeding, but device.get_properties failing
+    mock_websocket_client.send_command.side_effect = [
+        {"type": "result", "success": True},  # poll_refresh
+        {"type": "result", "success": False, "errorCode": "device_not_found"},  # get_properties
+        {"type": "result", "success": True},  # poll_refresh
+        {"type": "result", "success": False, "errorCode": "device_not_found"},  # get_properties
+        {"type": "result", "success": True},  # poll_refresh
+        {"type": "result", "success": False, "errorCode": "device_not_found"},  # get_properties
+    ]
 
     # First two failures - should NOT send alert
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")

@@ -201,46 +201,36 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Force P2P connection to standalone camera
-                try:
-                    connect_response = await self.websocket_client.send_command(
-                        "station.connect",
-                        {
-                            "serialNumber": device_sn
-                        },
-                        wait_response=True,
-                        timeout=15.0  # Longer timeout for P2P connection
-                    )
+                # Refresh cloud data to clear cache before checking device properties
+                refresh_response = await self.websocket_client.send_command(
+                    "driver.poll_refresh",
+                    {},
+                    wait_response=True,
+                    timeout=10.0
+                )
 
-                    if connect_response and connect_response.get("success"):
-                        # Connection succeeded - camera is online, now query battery
-                        battery_response = await self.websocket_client.send_command(
-                            "device.get_properties",
-                            {
-                                "serialNumber": device_sn,
-                                "properties": ["battery"]
-                            },
-                            wait_response=True,
-                            timeout=10.0
-                        )
+                if not (refresh_response and refresh_response.get("success")):
+                    logger.warning(f"⚠️ Failed to refresh cloud data for {device_sn}")
 
-                        if battery_response and battery_response.get("success"):
-                            logger.info(f"✅ Health check SUCCESS for {device_sn}")
-                            await self._handle_online_response(device_sn, slack_channel, battery_response)
-                        else:
-                            # Connected but no battery data - treat as online
-                            logger.info(f"✅ Health check SUCCESS for {device_sn} (no battery data)")
-                            await self._handle_online_response(device_sn, slack_channel, {"result": {"properties": {}}})
-                    else:
-                        # Connection command failed
-                        error_code = connect_response.get("errorCode") if connect_response else "no_response"
-                        logger.warning(f"📴 Failed to connect to {device_sn}: {error_code}")
-                        await self._handle_failure(device_sn, slack_channel, f"connect_failed_{error_code}")
+                # Now query device properties - should have fresh data
+                response = await self.websocket_client.send_command(
+                    "device.get_properties",
+                    {
+                        "serialNumber": device_sn,
+                        "properties": ["battery"]
+                    },
+                    wait_response=True,
+                    timeout=10.0
+                )
 
-                except asyncio.TimeoutError:
-                    # Connection timeout - camera is offline
-                    logger.warning(f"📴 Connection timeout for {device_sn} - camera is offline")
-                    await self._handle_failure(device_sn, slack_channel, "connect_timeout")
+                if response and response.get("success"):
+                    logger.info(f"✅ Health check SUCCESS for {device_sn}")
+                    await self._handle_online_response(device_sn, slack_channel, response)
+                else:
+                    # Command failed - device is offline
+                    error_code = response.get("errorCode") if response else "no_response"
+                    logger.warning(f"📴 Health check failed for {device_sn}: {error_code}")
+                    await self._handle_failure(device_sn, slack_channel, error_code)
 
             else:
                 # Regular cameras connected through HomeBase - use device.get_properties

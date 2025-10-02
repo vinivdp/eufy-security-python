@@ -226,15 +226,6 @@ class WebSocketClient:
             logger.debug(f"Received event without type: {event}")
             return
 
-        # Log ALL events to help debug what events we're receiving
-        source = event_data.get("source", "unknown")
-        serial_number = event_data.get("serialNumber", "N/A")
-        logger.info(f"📦 WebSocket Event: type={event_type}, source={source}, serial={serial_number}")
-
-        # Also log the full event data for station connection events
-        if event_type in ("connected", "disconnected"):
-            logger.info(f"🔍 Station connection event details: {event_data}")
-
         handler = self.event_handlers.get(event_type)
         if handler:
             try:
@@ -247,7 +238,8 @@ class WebSocketClient:
                     f"Error in event handler for {event_type}: {e}", exc_info=True
                 )
         else:
-            logger.info(f"No handler registered for event: {event_type}")
+            # Only log unhandled events at debug level to reduce noise
+            logger.debug(f"No handler registered for event: {event_type}")
 
     async def _reconnect(self) -> None:
         """Reconnect to WebSocket server"""
