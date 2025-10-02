@@ -132,13 +132,12 @@ async def test_check_camera_health_success_regular_camera(health_checker, mock_w
 @pytest.mark.asyncio
 async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client):
     """Test successful health check for standalone camera (T8B0* or T8150*)"""
-    # Mock station.is_connected returning connected
+    # Mock station.connect succeeding
     # Then mock device.get_properties for battery
     mock_websocket_client.send_command.side_effect = [
         {
             "type": "result",
-            "success": True,
-            "result": {"connected": True}
+            "success": True
         },
         {
             "type": "result",
@@ -153,12 +152,12 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
 
-    # Should have called send_command twice (station.is_connected + device.get_properties)
+    # Should have called send_command twice (station.connect + device.get_properties)
     assert mock_websocket_client.send_command.call_count == 2
 
-    # First call: station.is_connected
+    # First call: station.connect
     first_call = mock_websocket_client.send_command.call_args_list[0]
-    assert first_call[0][0] == "station.is_connected"
+    assert first_call[0][0] == "station.connect"
     assert first_call[0][1]["serialNumber"] == "T8B00511242309F6"
 
     # Second call: device.get_properties
@@ -169,12 +168,12 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
 @pytest.mark.asyncio
 async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook):
-    """Test health check when standalone camera is disconnected"""
-    # Mock station.is_connected returning disconnected
+    """Test health check when standalone camera fails to connect"""
+    # Mock station.connect failing
     mock_websocket_client.send_command.return_value = {
         "type": "result",
-        "success": True,
-        "result": {"connected": False}
+        "success": False,
+        "errorCode": "connection_error"
     }
 
     # First two failures - should NOT send alert
