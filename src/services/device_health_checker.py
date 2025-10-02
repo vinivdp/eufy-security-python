@@ -1,5 +1,6 @@
 """Device health checker service - polling-based battery and offline monitoring"""
 
+# Force rebuild - v2
 import asyncio
 import json
 import logging
