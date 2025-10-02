@@ -1,11 +1,11 @@
 """Device health checker service - polling-based battery and offline monitoring"""
 
-# Force rebuild - v4
+# Force rebuild - v5
 import asyncio
 import json
 import logging
 
-print("🔥 DEVICE_HEALTH_CHECKER MODULE LOADED - V4 🔥")
+print("🔥 DEVICE_HEALTH_CHECKER MODULE LOADED - V5 🔥")
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -206,7 +206,7 @@ class DeviceHealthChecker:
             if is_standalone:
                 # Standalone cameras: First get current status LED state, then toggle it
                 # This forces a P2P connection - offline cameras will timeout/fail
-                logger.debug(f"🔌 Testing P2P connection for standalone camera {device_sn}...")
+                logger.info(f"🔌 Testing P2P connection for standalone camera {device_sn}...")
 
                 # Get current status LED state
                 led_response = await self.websocket_client.send_command(
@@ -231,7 +231,7 @@ class DeviceHealthChecker:
                 # Toggle status LED (force change to opposite value)
                 # This requires P2P connection - will fail if camera is offline
                 toggled_led_state = not current_led_state
-                logger.debug(f"📡 Toggling LED from {current_led_state} to {toggled_led_state}")
+                logger.info(f"📡 Toggling LED from {current_led_state} to {toggled_led_state}")
 
                 set_led_response = await self.websocket_client.send_command(
                     "device.set_status_led",
@@ -250,7 +250,7 @@ class DeviceHealthChecker:
                     return
 
                 # P2P connection successful - restore LED to original state
-                logger.debug(f"📡 Restoring LED to original state: {current_led_state}")
+                logger.info(f"📡 Restoring LED to original state: {current_led_state}")
                 restore_led_response = await self.websocket_client.send_command(
                     "device.set_status_led",
                     {
