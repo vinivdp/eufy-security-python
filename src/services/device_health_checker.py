@@ -205,24 +205,28 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Check real-time connection state FIRST via WebSocket events
-                if not self.connection_tracker.is_connected(device_sn):
-                    logger.warning(f"📴 Station NOT connected for {device_sn} - camera is offline")
-                    await self._handle_failure(device_sn, slack_channel, "station_disconnected")
-                    return
-
-                # If connected via P2P, check battery
+                # Try to get device properties - this will fail if camera is actually offline
                 response = await self.websocket_client.send_command(
                     "device.get_properties",
                     {
                         "serialNumber": device_sn,
-                        "properties": ["battery"]
+                        "properties": ["battery", "state"]
                     },
                     wait_response=True,
                     timeout=10.0
                 )
 
                 if response and response.get("success"):
+                    # Got a response - but check if connection tracker says it's disconnected
+                    # (This handles the case where cached data returns success but camera is actually offline)
+                    disconnected_time = self.connection_tracker.get_disconnection_time(device_sn)
+                    if disconnected_time is not None:
+                        # We have explicit disconnect event - camera is offline
+                        logger.warning(f"📴 Station disconnected for {device_sn} (WebSocket event at {disconnected_time})")
+                        await self._handle_failure(device_sn, slack_channel, "station_disconnected")
+                        return
+
+                    # Device is online - check battery
                     logger.info(f"✅ Health check SUCCESS for {device_sn}")
                     await self._handle_online_response(device_sn, slack_channel, response)
                 else:

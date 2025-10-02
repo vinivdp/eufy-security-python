@@ -143,8 +143,8 @@ async def test_check_camera_health_success_regular_camera(health_checker, mock_w
 @pytest.mark.asyncio
 async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client, mock_connection_tracker):
     """Test successful health check for standalone camera (T8B0* or T8150*)"""
-    # Mock connection tracker showing device is connected
-    mock_connection_tracker.is_connected.return_value = True
+    # Mock connection tracker - no disconnect event (device is online)
+    mock_connection_tracker.get_disconnection_time.return_value = None
 
     # Mock device.get_properties for battery
     mock_websocket_client.send_command.return_value = {
@@ -159,8 +159,8 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
 
-    # Should have checked connection state
-    mock_connection_tracker.is_connected.assert_called_with("T8B00511242309F6")
+    # Should have checked for disconnection after successful query
+    mock_connection_tracker.get_disconnection_time.assert_called_with("T8B00511242309F6")
 
     # Should have called send_command once for device.get_properties
     mock_websocket_client.send_command.assert_called_once()
@@ -171,9 +171,22 @@ async def test_check_camera_health_success_standalone_camera(health_checker, moc
 
 @pytest.mark.asyncio
 async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook, mock_connection_tracker):
-    """Test health check when standalone camera is offline (disconnected via WebSocket)"""
-    # Mock connection tracker showing device is disconnected
-    mock_connection_tracker.is_connected.return_value = False
+    """Test health check when standalone camera returns success but has disconnect event"""
+    from datetime import datetime
+
+    # Mock device.get_properties returning success (cached data)
+    mock_websocket_client.send_command.return_value = {
+        "type": "result",
+        "success": True,
+        "result": {
+            "properties": {
+                "battery": 100
+            }
+        }
+    }
+
+    # Mock connection tracker showing explicit disconnect event
+    mock_connection_tracker.get_disconnection_time.return_value = datetime.now()
 
     # First two failures - should NOT send alert
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
@@ -188,8 +201,8 @@ async def test_check_camera_health_standalone_camera_disconnected(health_checker
     assert "T8B00511242309F6" in health_checker.offline_devices_timestamps
     assert health_checker.failure_counts["T8B00511242309F6"] == 3
 
-    # Should not have called send_command since we detected disconnection early
-    mock_websocket_client.send_command.assert_not_called()
+    # Should have called send_command to query properties (which succeeded but was overridden by disconnect event)
+    assert mock_websocket_client.send_command.call_count == 3
 
 
 @pytest.mark.asyncio
