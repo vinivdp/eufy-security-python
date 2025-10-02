@@ -1,11 +1,11 @@
 """Device health checker service - polling-based battery and offline monitoring"""
 
-# Force rebuild - v5
+# Force rebuild - v6
 import asyncio
 import json
 import logging
 
-print("🔥 DEVICE_HEALTH_CHECKER MODULE LOADED - V5 🔥")
+print("🔥 DEVICE_HEALTH_CHECKER MODULE LOADED - V6 🔥")
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -204,66 +204,39 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Standalone cameras: First get current status LED state, then toggle it
-                # This forces a P2P connection - offline cameras will timeout/fail
-                logger.info(f"🔌 Testing P2P connection for standalone camera {device_sn}...")
+                # For standalone cameras, check station connection status first
+                # The device acts as its own station, so we check station.connected property
+                logger.info(f"🔌 Checking station connection status for standalone camera {device_sn}...")
 
-                # Get current status LED state
-                led_response = await self.websocket_client.send_command(
-                    "device.get_properties",
+                station_response = await self.websocket_client.send_command(
+                    "station.get_properties",
                     {
                         "serialNumber": device_sn,
-                        "properties": ["statusLed"]
+                        "properties": ["connected"]
                     },
                     wait_response=True,
                     timeout=10.0
                 )
 
-                if not led_response or not led_response.get("success"):
-                    error_code = led_response.get("errorCode") if led_response else "no_response"
-                    logger.warning(f"📴 Failed to get status LED for {device_sn}: {error_code}")
-                    await self._handle_failure(device_sn, slack_channel, error_code)
-                    return
+                if station_response and station_response.get("success"):
+                    result = station_response.get("result", {})
+                    properties = result.get("properties", {})
+                    is_connected = properties.get("connected")
 
-                # Get current LED state (default to True if not found)
-                current_led_state = led_response.get("result", {}).get("properties", {}).get("statusLed", True)
+                    if is_connected is False:
+                        logger.warning(f"📴 Station {device_sn} reports connected=false (offline)")
+                        await self._handle_failure(device_sn, slack_channel, "station_disconnected")
+                        return
+                    elif is_connected is True:
+                        logger.info(f"✅ Station {device_sn} reports connected=true (online)")
+                    else:
+                        logger.warning(f"⚠️  Station {device_sn} connected property is unknown: {is_connected}")
+                        # Fall back to livestream test if connected status is unknown
+                else:
+                    logger.warning(f"⚠️  Failed to get station connection status for {device_sn}")
+                    # Fall back to livestream test if station query fails
 
-                # Toggle status LED (force change to opposite value)
-                # This requires P2P connection - will fail if camera is offline
-                toggled_led_state = not current_led_state
-                logger.info(f"📡 Toggling LED from {current_led_state} to {toggled_led_state}")
-
-                set_led_response = await self.websocket_client.send_command(
-                    "device.set_status_led",
-                    {
-                        "serialNumber": device_sn,
-                        "value": toggled_led_state  # Toggle to opposite value
-                    },
-                    wait_response=True,
-                    timeout=25.0  # Allow time for P2P timeout (~20s)
-                )
-
-                if not set_led_response or not set_led_response.get("success"):
-                    error_code = set_led_response.get("errorCode") if set_led_response else "no_response"
-                    logger.warning(f"📴 Status LED command failed for {device_sn}: {error_code}")
-                    await self._handle_failure(device_sn, slack_channel, error_code)
-                    return
-
-                # P2P connection successful - restore LED to original state
-                logger.info(f"📡 Restoring LED to original state: {current_led_state}")
-                restore_led_response = await self.websocket_client.send_command(
-                    "device.set_status_led",
-                    {
-                        "serialNumber": device_sn,
-                        "value": current_led_state  # Restore original state
-                    },
-                    wait_response=True,
-                    timeout=10.0
-                )
-                if not restore_led_response or not restore_led_response.get("success"):
-                    logger.warning(f"⚠️  Failed to restore LED state for {device_sn}")
-
-                # Camera is online - get battery level
+                # Camera is online (or status unknown) - get battery level
                 response = await self.websocket_client.send_command(
                     "device.get_properties",
                     {
