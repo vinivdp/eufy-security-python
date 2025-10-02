@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.services.device_health_checker import DeviceHealthChecker, OFFLINE_DEVICES_FILE
 from src.services.camera_registry import get_brasilia_now
+from src.services.connection_tracker import ConnectionTracker
 
 
 @pytest.fixture
@@ -41,7 +42,15 @@ def mock_error_logger():
 
 
 @pytest.fixture
-def health_checker(mock_websocket_client, mock_camera_registry, mock_workato_webhook, mock_error_logger):
+def mock_connection_tracker():
+    """Create a mock connection tracker"""
+    tracker = MagicMock(spec=ConnectionTracker)
+    tracker.is_connected = MagicMock(return_value=True)  # Default to connected
+    return tracker
+
+
+@pytest.fixture
+def health_checker(mock_websocket_client, mock_camera_registry, mock_workato_webhook, mock_error_logger, mock_connection_tracker):
     """Create a DeviceHealthChecker instance"""
     # Clean up any existing offline devices file
     if OFFLINE_DEVICES_FILE.exists():
@@ -52,6 +61,7 @@ def health_checker(mock_websocket_client, mock_camera_registry, mock_workato_web
         camera_registry=mock_camera_registry,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
+        connection_tracker=mock_connection_tracker,
         polling_interval_minutes=5,
         failure_threshold=3,
         battery_threshold_percent=30,
@@ -94,6 +104,7 @@ def test_save_and_load_offline_devices(health_checker):
         camera_registry=MagicMock(),
         workato_webhook=MagicMock(),
         error_logger=MagicMock(),
+        connection_tracker=MagicMock(spec=ConnectionTracker),
     )
 
     # Should have loaded the devices
@@ -130,53 +141,39 @@ async def test_check_camera_health_success_regular_camera(health_checker, mock_w
 
 
 @pytest.mark.asyncio
-async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client):
+async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client, mock_connection_tracker):
     """Test successful health check for standalone camera (T8B0* or T8150*)"""
-    # Mock driver.poll_refresh succeeding
-    # Then mock device.get_properties for battery
-    mock_websocket_client.send_command.side_effect = [
-        {
-            "type": "result",
-            "success": True
-        },
-        {
-            "type": "result",
-            "success": True,
-            "result": {
-                "properties": {
-                    "battery": 85
-                }
+    # Mock connection tracker showing device is connected
+    mock_connection_tracker.is_connected.return_value = True
+
+    # Mock device.get_properties for battery
+    mock_websocket_client.send_command.return_value = {
+        "type": "result",
+        "success": True,
+        "result": {
+            "properties": {
+                "battery": 85
             }
         }
-    ]
+    }
 
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
 
-    # Should have called send_command twice (driver.poll_refresh + device.get_properties)
-    assert mock_websocket_client.send_command.call_count == 2
+    # Should have checked connection state
+    mock_connection_tracker.is_connected.assert_called_with("T8B00511242309F6")
 
-    # First call: driver.poll_refresh
-    first_call = mock_websocket_client.send_command.call_args_list[0]
-    assert first_call[0][0] == "driver.poll_refresh"
-
-    # Second call: device.get_properties
-    second_call = mock_websocket_client.send_command.call_args_list[1]
-    assert second_call[0][0] == "device.get_properties"
-    assert second_call[0][1]["serialNumber"] == "T8B00511242309F6"
+    # Should have called send_command once for device.get_properties
+    mock_websocket_client.send_command.assert_called_once()
+    call_args = mock_websocket_client.send_command.call_args
+    assert call_args[0][0] == "device.get_properties"
+    assert call_args[0][1]["serialNumber"] == "T8B00511242309F6"
 
 
 @pytest.mark.asyncio
-async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook):
-    """Test health check when standalone camera is offline"""
-    # Mock driver.poll_refresh succeeding, but device.get_properties failing
-    mock_websocket_client.send_command.side_effect = [
-        {"type": "result", "success": True},  # poll_refresh
-        {"type": "result", "success": False, "errorCode": "device_not_found"},  # get_properties
-        {"type": "result", "success": True},  # poll_refresh
-        {"type": "result", "success": False, "errorCode": "device_not_found"},  # get_properties
-        {"type": "result", "success": True},  # poll_refresh
-        {"type": "result", "success": False, "errorCode": "device_not_found"},  # get_properties
-    ]
+async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook, mock_connection_tracker):
+    """Test health check when standalone camera is offline (disconnected via WebSocket)"""
+    # Mock connection tracker showing device is disconnected
+    mock_connection_tracker.is_connected.return_value = False
 
     # First two failures - should NOT send alert
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
@@ -190,6 +187,9 @@ async def test_check_camera_health_standalone_camera_disconnected(health_checker
     # Device should be in offline_devices_timestamps
     assert "T8B00511242309F6" in health_checker.offline_devices_timestamps
     assert health_checker.failure_counts["T8B00511242309F6"] == 3
+
+    # Should not have called send_command since we detected disconnection early
+    mock_websocket_client.send_command.assert_not_called()
 
 
 @pytest.mark.asyncio

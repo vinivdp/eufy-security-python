@@ -12,6 +12,10 @@ from ..utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
+# Forward declaration for type hints
+if False:  # pragma: no cover
+    from ..services.connection_tracker import ConnectionTracker
+
 
 class WebSocketClient:
     """
@@ -45,6 +49,9 @@ class WebSocketClient:
 
         # Request-response correlation: messageId -> asyncio.Future
         self._pending_requests: Dict[str, asyncio.Future] = {}
+
+        # Connection tracker (set by orchestrator)
+        self.connection_tracker: Optional["ConnectionTracker"] = None
 
     async def connect(self) -> None:
         """Connect to WebSocket server with 3x retry"""
@@ -225,6 +232,16 @@ class WebSocketClient:
         if not event_type:
             logger.debug(f"Received event without type: {event}")
             return
+
+        # Track connection state changes
+        if self.connection_tracker and event_type in ("connected", "disconnected"):
+            source = event_data.get("source")
+            serial = event_data.get("serialNumber")
+            if source == "station" and serial:
+                if event_type == "connected":
+                    self.connection_tracker.handle_connected(serial)
+                elif event_type == "disconnected":
+                    self.connection_tracker.handle_disconnected(serial)
 
         handler = self.event_handlers.get(event_type)
         if handler:

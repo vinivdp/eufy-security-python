@@ -14,6 +14,7 @@ from ..services.error_logger import ErrorLogger
 
 if TYPE_CHECKING:
     from ..clients.websocket_client import WebSocketClient
+    from ..services.connection_tracker import ConnectionTracker
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class DeviceHealthChecker:
         camera_registry: CameraRegistry,
         workato_webhook: WorkatoWebhook,
         error_logger: ErrorLogger,
+        connection_tracker: "ConnectionTracker",
         polling_interval_minutes: int = 5,
         failure_threshold: int = 3,
         battery_threshold_percent: int = 30,
@@ -49,6 +51,7 @@ class DeviceHealthChecker:
             camera_registry: CameraRegistry instance
             workato_webhook: WorkatoWebhook instance
             error_logger: ErrorLogger instance
+            connection_tracker: ConnectionTracker instance for real-time connection state
             polling_interval_minutes: Minutes between health checks
             failure_threshold: Number of failures before marking offline
             battery_threshold_percent: Battery % threshold for alert
@@ -58,6 +61,7 @@ class DeviceHealthChecker:
         self.camera_registry = camera_registry
         self.workato_webhook = workato_webhook
         self.error_logger = error_logger
+        self.connection_tracker = connection_tracker
         self.polling_interval_minutes = polling_interval_minutes
         self.failure_threshold = failure_threshold
         self.battery_threshold_percent = battery_threshold_percent
@@ -201,18 +205,13 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Refresh cloud data to clear cache before checking device properties
-                refresh_response = await self.websocket_client.send_command(
-                    "driver.poll_refresh",
-                    {},
-                    wait_response=True,
-                    timeout=10.0
-                )
+                # Check real-time connection state FIRST via WebSocket events
+                if not self.connection_tracker.is_connected(device_sn):
+                    logger.warning(f"📴 Station NOT connected for {device_sn} - camera is offline")
+                    await self._handle_failure(device_sn, slack_channel, "station_disconnected")
+                    return
 
-                if not (refresh_response and refresh_response.get("success")):
-                    logger.warning(f"⚠️ Failed to refresh cloud data for {device_sn}")
-
-                # Now query device properties - should have fresh data
+                # If connected via P2P, check battery
                 response = await self.websocket_client.send_command(
                     "device.get_properties",
                     {
