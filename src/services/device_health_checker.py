@@ -201,38 +201,42 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Force P2P connection attempt (like eufy-ws-webapp does)
-                # This will timeout if the camera is actually offline, unlike device.get_properties which returns cached data
-                logger.debug(f"🔌 Forcing P2P connection to standalone camera {device_sn}...")
-                response = await self.websocket_client.send_command(
-                    "station.connect",
+                # Standalone cameras act as their own stations - check if station is connected
+                # This should force a P2P connection check rather than returning cached data
+                logger.debug(f"🔌 Checking P2P connection for standalone camera {device_sn}...")
+
+                connection_check = await self.websocket_client.send_command(
+                    "station.is_connected",
                     {
                         "serialNumber": device_sn
                     },
                     wait_response=True,
-                    timeout=25.0  # eufy-ws-webapp uses ~20s timeout
+                    timeout=30.0  # Allow time for P2P connection attempt
+                )
+
+                # If not connected or command failed, camera is offline
+                if not connection_check or not connection_check.get("success") or not connection_check.get("result", {}).get("state"):
+                    logger.warning(f"📴 Station not connected for {device_sn}")
+                    await self._handle_failure(device_sn, slack_channel, "station_not_connected")
+                    return
+
+                # Station is connected - now get battery level
+                response = await self.websocket_client.send_command(
+                    "device.get_properties",
+                    {
+                        "serialNumber": device_sn,
+                        "properties": ["battery"]
+                    },
+                    wait_response=True,
+                    timeout=10.0
                 )
 
                 if response and response.get("success"):
-                    # P2P connection successful - camera is online
-                    # Now get battery level
-                    logger.debug(f"✅ P2P connection successful for {device_sn}, fetching battery...")
-                    battery_response = await self.websocket_client.send_command(
-                        "device.get_properties",
-                        {
-                            "serialNumber": device_sn,
-                            "properties": ["battery"]
-                        },
-                        wait_response=True,
-                        timeout=10.0
-                    )
-
                     logger.info(f"✅ Health check SUCCESS for {device_sn}")
-                    await self._handle_online_response(device_sn, slack_channel, battery_response)
+                    await self._handle_online_response(device_sn, slack_channel, response)
                 else:
-                    # P2P connection failed or timed out - camera is offline
-                    error_code = response.get("errorCode") if response else "p2p_connection_timeout"
-                    logger.warning(f"📴 P2P connection failed for {device_sn}: {error_code}")
+                    error_code = response.get("errorCode") if response else "no_response"
+                    logger.warning(f"📴 Health check failed for {device_sn}: {error_code}")
                     await self._handle_failure(device_sn, slack_channel, error_code)
 
             else:
