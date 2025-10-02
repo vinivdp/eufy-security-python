@@ -1,9 +1,11 @@
 """Device health checker service - polling-based battery and offline monitoring"""
 
-# Force rebuild - v2
+# Force rebuild - v3
 import asyncio
 import json
 import logging
+
+print("🔥 DEVICE_HEALTH_CHECKER MODULE LOADED - V3 🔥")
 from typing import Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 from pathlib import Path
