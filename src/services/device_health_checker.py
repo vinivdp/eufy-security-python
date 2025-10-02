@@ -204,6 +204,31 @@ class DeviceHealthChecker:
                 timeout=10.0
             )
 
+            # Also check station connection status to verify real P2P connectivity
+            # This prevents false positives from cached cloud data
+            if response and response.get("success"):
+                station_response = await self.websocket_client.send_command(
+                    "station.get_properties",
+                    {
+                        "serialNumber": device_sn,
+                        "properties": ["connected"]
+                    },
+                    wait_response=True,
+                    timeout=10.0
+                )
+                # Check if station is actually connected (not just cached data)
+                if station_response and station_response.get("success"):
+                    station_props = station_response.get("result", {}).get("properties", {})
+                    is_connected = station_props.get("connected", False)
+                    if not is_connected:
+                        # Station not connected - treat as offline
+                        logger.warning(f"📴 Camera {device_sn} has cached data but station not connected")
+                        response = {"success": False, "errorCode": "station_not_connected"}
+                else:
+                    # Station query failed - treat as offline
+                    logger.warning(f"📴 Camera {device_sn} station query failed")
+                    response = {"success": False, "errorCode": "station_query_failed"}
+
             if response and response.get("success"):
                 # Device responded - it's online
                 logger.info(f"✅ Health check SUCCESS for {device_sn}")
