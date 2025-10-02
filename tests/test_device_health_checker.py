@@ -111,45 +111,24 @@ def test_save_and_load_offline_devices(health_checker):
 @pytest.mark.asyncio
 async def test_check_camera_health_success(health_checker, mock_websocket_client):
     """Test successful health check"""
-    # Mock successful response for both device and station properties
-    mock_websocket_client.send_command.side_effect = [
-        # First call: device.get_properties returns battery level
-        {
-            "type": "result",
-            "success": True,
-            "result": {
-                "properties": {
-                    "battery": 85
-                }
-            }
-        },
-        # Second call: station.get_properties returns connected status
-        {
-            "type": "result",
-            "success": True,
-            "result": {
-                "properties": {
-                    "connected": True
-                }
+    # Mock successful response
+    mock_websocket_client.send_command.return_value = {
+        "type": "result",
+        "success": True,
+        "result": {
+            "properties": {
+                "battery": 85
             }
         }
-    ]
+    }
 
     await health_checker._check_camera_health("TEST123", "test-channel")
 
-    # Should have called send_command twice (device + station)
-    assert mock_websocket_client.send_command.call_count == 2
-
-    # Verify first call was for device properties
-    first_call = mock_websocket_client.send_command.call_args_list[0]
-    assert first_call.args[0] == "device.get_properties"
-    assert first_call.kwargs["wait_response"] is True
-    assert first_call.kwargs["timeout"] == 10.0
-
-    # Verify second call was for station properties
-    second_call = mock_websocket_client.send_command.call_args_list[1]
-    assert second_call.args[0] == "station.get_properties"
-    assert second_call.args[1]["properties"] == ["connected"]
+    # Should have called send_command once
+    mock_websocket_client.send_command.assert_called_once()
+    call_args = mock_websocket_client.send_command.call_args
+    assert call_args.kwargs["wait_response"] is True
+    assert call_args.kwargs["timeout"] == 10.0
 
 
 @pytest.mark.asyncio
@@ -194,34 +173,21 @@ async def test_check_camera_health_retry_after_24h(health_checker, mock_websocke
     # Mark device as offline 25 hours ago
     health_checker.offline_devices_timestamps["OLD_OFFLINE"] = get_brasilia_now() - timedelta(hours=25)
 
-    # Mock successful response for both device and station properties (device is back)
-    mock_websocket_client.send_command.side_effect = [
-        # First call: device.get_properties returns battery level
-        {
-            "type": "result",
-            "success": True,
-            "result": {
-                "properties": {
-                    "battery": 90
-                }
-            }
-        },
-        # Second call: station.get_properties returns connected status
-        {
-            "type": "result",
-            "success": True,
-            "result": {
-                "properties": {
-                    "connected": True
-                }
+    # Mock successful response (device is back)
+    mock_websocket_client.send_command.return_value = {
+        "type": "result",
+        "success": True,
+        "result": {
+            "properties": {
+                "battery": 90
             }
         }
-    ]
+    }
 
     await health_checker._check_camera_health("OLD_OFFLINE", "test-channel")
 
-    # Should have called send_command twice (device + station)
-    assert mock_websocket_client.send_command.call_count == 2
+    # Should have called send_command once
+    mock_websocket_client.send_command.assert_called_once()
 
     # Device should be removed from offline list
     assert "OLD_OFFLINE" not in health_checker.offline_devices_timestamps

@@ -204,30 +204,8 @@ class DeviceHealthChecker:
                 timeout=10.0
             )
 
-            # Also check station connection status to verify real P2P connectivity
-            # This prevents false positives from cached cloud data
-            if response and response.get("success"):
-                station_response = await self.websocket_client.send_command(
-                    "station.get_properties",
-                    {
-                        "serialNumber": device_sn,
-                        "properties": ["connected"]
-                    },
-                    wait_response=True,
-                    timeout=10.0
-                )
-                # Check if station is actually connected (not just cached data)
-                if station_response and station_response.get("success"):
-                    station_props = station_response.get("result", {}).get("properties", {})
-                    is_connected = station_props.get("connected", False)
-                    if not is_connected:
-                        # Station not connected - treat as offline
-                        logger.warning(f"📴 Camera {device_sn} has cached data but station not connected")
-                        response = {"success": False, "errorCode": "station_not_connected"}
-                else:
-                    # Station query failed - treat as offline
-                    logger.warning(f"📴 Camera {device_sn} station query failed")
-                    response = {"success": False, "errorCode": "station_query_failed"}
+            # Log the full response to debug why offline cameras return battery data
+            logger.info(f"📡 Full response for {device_sn}: {response}")
 
             if response and response.get("success"):
                 # Device responded - it's online
@@ -236,7 +214,7 @@ class DeviceHealthChecker:
             else:
                 # Command failed - log the error code if available
                 error_code = response.get("errorCode") if response else "no_response"
-                logger.info(f"❌ Health check failed for {device_sn}: error_code={error_code}, response={response}")
+                logger.info(f"❌ Health check failed for {device_sn}: error_code={error_code}")
                 await self._handle_failure(device_sn, slack_channel, error_code)
 
         except asyncio.TimeoutError:
