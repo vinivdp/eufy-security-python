@@ -201,11 +201,49 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Standalone cameras: use longer timeout to detect offline state
-                # When offline, P2P connection attempt will timeout (~20s based on eufy-ws-webapp logs)
-                # When online, response is immediate from cache
-                logger.debug(f"🔌 Checking standalone camera {device_sn} with extended timeout...")
+                # Standalone cameras: First get current status LED state, then toggle it
+                # This forces a P2P connection - offline cameras will timeout/fail
+                logger.debug(f"🔌 Testing P2P connection for standalone camera {device_sn}...")
 
+                # Get current status LED state
+                led_response = await self.websocket_client.send_command(
+                    "device.get_properties",
+                    {
+                        "serialNumber": device_sn,
+                        "properties": ["statusLed"]
+                    },
+                    wait_response=True,
+                    timeout=10.0
+                )
+
+                if not led_response or not led_response.get("success"):
+                    error_code = led_response.get("errorCode") if led_response else "no_response"
+                    logger.warning(f"📴 Failed to get status LED for {device_sn}: {error_code}")
+                    await self._handle_failure(device_sn, slack_channel, error_code)
+                    return
+
+                # Get current LED state (default to True if not found)
+                current_led_state = led_response.get("result", {}).get("properties", {}).get("statusLed", True)
+
+                # Toggle status LED (set to same value to avoid actually changing it)
+                # This requires P2P connection - will fail if camera is offline
+                set_led_response = await self.websocket_client.send_command(
+                    "device.set_status_led",
+                    {
+                        "serialNumber": device_sn,
+                        "value": current_led_state  # Set to same value
+                    },
+                    wait_response=True,
+                    timeout=25.0  # Allow time for P2P timeout (~20s)
+                )
+
+                if not set_led_response or not set_led_response.get("success"):
+                    error_code = set_led_response.get("errorCode") if set_led_response else "no_response"
+                    logger.warning(f"📴 Status LED command failed for {device_sn}: {error_code}")
+                    await self._handle_failure(device_sn, slack_channel, error_code)
+                    return
+
+                # Camera is online - get battery level
                 response = await self.websocket_client.send_command(
                     "device.get_properties",
                     {
@@ -213,7 +251,7 @@ class DeviceHealthChecker:
                         "properties": ["battery"]
                     },
                     wait_response=True,
-                    timeout=25.0  # Long enough to catch P2P timeout (~20s) but not too long
+                    timeout=10.0
                 )
 
                 if response and response.get("success"):
