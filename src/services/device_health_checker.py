@@ -204,44 +204,15 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # For standalone cameras, check station connection status first
-                # The device acts as its own station, so we check station.connected property
-                logger.info(f"🔌 Checking station connection status for standalone camera {device_sn}...")
+                # For standalone cameras, query device properties including station connection
+                # Check both battery and the device's station connection status
+                logger.info(f"🔌 Checking device properties for standalone camera {device_sn}...")
 
-                station_response = await self.websocket_client.send_command(
-                    "station.get_properties",
-                    {
-                        "serialNumber": device_sn,
-                        "properties": ["connected"]
-                    },
-                    wait_response=True,
-                    timeout=10.0
-                )
-
-                if station_response and station_response.get("success"):
-                    result = station_response.get("result", {})
-                    properties = result.get("properties", {})
-                    is_connected = properties.get("connected")
-
-                    if is_connected is False:
-                        logger.warning(f"📴 Station {device_sn} reports connected=false (offline)")
-                        await self._handle_failure(device_sn, slack_channel, "station_disconnected")
-                        return
-                    elif is_connected is True:
-                        logger.info(f"✅ Station {device_sn} reports connected=true (online)")
-                    else:
-                        logger.warning(f"⚠️  Station {device_sn} connected property is unknown: {is_connected}")
-                        # Fall back to livestream test if connected status is unknown
-                else:
-                    logger.warning(f"⚠️  Failed to get station connection status for {device_sn}")
-                    # Fall back to livestream test if station query fails
-
-                # Camera is online (or status unknown) - get battery level
                 response = await self.websocket_client.send_command(
                     "device.get_properties",
                     {
                         "serialNumber": device_sn,
-                        "properties": ["battery"]
+                        "properties": ["battery", "stationConnected"]
                     },
                     wait_response=True,
                     timeout=10.0
@@ -293,6 +264,20 @@ class DeviceHealthChecker:
             slack_channel: Slack channel for alerts
             response: Response from get_properties command
         """
+        # Response structure: {"type": "result", "success": true, "result": {"properties": {"battery": ..., "stationConnected": ...}}}
+        result = response.get("result", {})
+        properties = result.get("properties", {})
+
+        # For standalone cameras, check if station is connected
+        station_connected = properties.get("stationConnected")
+        if station_connected is False:
+            logger.warning(f"📴 Device {device_sn} reports stationConnected=false (offline)")
+            await self._handle_failure(device_sn, slack_channel, "station_disconnected")
+            return
+        elif station_connected is True:
+            logger.info(f"✅ Device {device_sn} reports stationConnected=true (online)")
+        # If stationConnected is None/missing, continue (not a standalone camera or property not available)
+
         # Device is online - reset failure count
         if device_sn in self.failure_counts:
             logger.info(f"✅ Camera {device_sn} is back online")
@@ -305,9 +290,6 @@ class DeviceHealthChecker:
             logger.info(f"📡 Camera {device_sn} recovered from offline state")
 
         # Check battery level
-        # Response structure: {"type": "result", "success": true, "result": {"properties": {"battery": ...}}}
-        result = response.get("result", {})
-        properties = result.get("properties", {})
         battery_level = properties.get("battery")
 
         if battery_level is not None:
