@@ -208,9 +208,22 @@ class DeviceHealthChecker:
             logger.info(f"📡 Full response for {device_sn}: {response}")
 
             if response and response.get("success"):
-                # Device responded - it's online
-                logger.info(f"✅ Health check SUCCESS for {device_sn}")
-                await self._handle_online_response(device_sn, slack_channel, response)
+                # API returned success, but check the 'state' property to verify device is actually connected
+                # state: 1 = online/connected, other values may indicate offline/disconnected
+                result = response.get("result", {})
+                properties = result.get("properties", {})
+                state = properties.get("state")
+
+                logger.info(f"🔍 Device state for {device_sn}: {state}")
+
+                if state == 1:
+                    # Device is actually online and connected
+                    logger.info(f"✅ Health check SUCCESS for {device_sn}")
+                    await self._handle_online_response(device_sn, slack_channel, response)
+                else:
+                    # Device returned cached data but is not connected
+                    logger.warning(f"📴 Camera {device_sn} returned cached data (state={state}) but is offline")
+                    await self._handle_failure(device_sn, slack_channel, f"state_{state}")
             else:
                 # Command failed - log the error code if available
                 error_code = response.get("errorCode") if response else "no_response"

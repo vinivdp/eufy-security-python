@@ -111,13 +111,14 @@ def test_save_and_load_offline_devices(health_checker):
 @pytest.mark.asyncio
 async def test_check_camera_health_success(health_checker, mock_websocket_client):
     """Test successful health check"""
-    # Mock successful response
+    # Mock successful response with state=1 (online)
     mock_websocket_client.send_command.return_value = {
         "type": "result",
         "success": True,
         "result": {
             "properties": {
-                "battery": 85
+                "battery": 85,
+                "state": 1
             }
         }
     }
@@ -173,13 +174,14 @@ async def test_check_camera_health_retry_after_24h(health_checker, mock_websocke
     # Mark device as offline 25 hours ago
     health_checker.offline_devices_timestamps["OLD_OFFLINE"] = get_brasilia_now() - timedelta(hours=25)
 
-    # Mock successful response (device is back)
+    # Mock successful response with state=1 (device is back online)
     mock_websocket_client.send_command.return_value = {
         "type": "result",
         "success": True,
         "result": {
             "properties": {
-                "battery": 90
+                "battery": 90,
+                "state": 1
             }
         }
     }
