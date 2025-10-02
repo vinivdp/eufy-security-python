@@ -26,6 +26,7 @@ class StateTimeoutChecker:
         camera_registry: CameraRegistry,
         workato_webhook: WorkatoWebhook,
         error_logger: ErrorLogger,
+        motion_handler: "MotionAlarmHandler",
         timeout_minutes: int = 60,
         check_interval_seconds: int = 60,
     ):
@@ -36,12 +37,14 @@ class StateTimeoutChecker:
             camera_registry: CameraRegistry instance
             workato_webhook: WorkatoWebhook instance
             error_logger: ErrorLogger instance
+            motion_handler: MotionAlarmHandler instance (for event logs)
             timeout_minutes: Minutes of inactivity before auto-closing (default 60)
             check_interval_seconds: How often to check for timeouts (default 60s)
         """
         self.camera_registry = camera_registry
         self.workato_webhook = workato_webhook
         self.error_logger = error_logger
+        self.motion_handler = motion_handler
         self.timeout_minutes = timeout_minutes
         self.check_interval_seconds = check_interval_seconds
         self._running = False
@@ -128,17 +131,23 @@ class StateTimeoutChecker:
 
             logger.info(f"📴 Camera {device_sn} auto-closed after {duration_seconds / 60:.1f}m (OPEN → CLOSED)")
 
-            # Send motion_stopped webhook
+            # Get accumulated event log from motion handler
+            event_log = self.motion_handler.get_and_clear_event_log(device_sn)
+
+            # Send motion_stopped webhook with event log
             event = MotionStoppedEvent(
                 device_sn=device_sn,
                 slack_channel=camera.slack_channel,
                 state="closed",
                 duration_seconds=duration_seconds,
                 latest_activity=camera.latest_activity,
+                event_log=event_log,  # Include accumulated motion events
             )
 
             await self.workato_webhook.send_event(event)
-            logger.info(f"✅ Motion stopped webhook sent for {device_sn} (timeout)")
+            logger.info(
+                f"✅ Motion stopped webhook sent for {device_sn} (timeout) with {len(event_log)} logged events"
+            )
 
         except Exception as e:
             logger.error(f"Error transitioning {device_sn} to closed: {e}")

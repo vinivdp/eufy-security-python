@@ -41,6 +41,7 @@ class MotionStoppedEvent(BaseEvent):
     state: Literal["closed"] = "closed"  # Always closed after timeout
     duration_seconds: int
     latest_activity: datetime
+    event_log: Optional[list[dict]] = None  # Log of all motion events during open/close cycle
 
 
 class LowBatteryEvent(BaseEvent):

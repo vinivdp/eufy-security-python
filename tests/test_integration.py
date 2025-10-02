@@ -27,6 +27,9 @@ async def test_motion_detection_workflow(mock_config):
         # Wait for camera registry to load
         await asyncio.sleep(0.1)
 
+        # Set camera to closed state first (may start as open in cameras.txt)
+        await orchestrator.camera_registry.set_state("T8150P40241800E7", "closed")
+
         # Simulate motion detected event (use real camera from registry)
         motion_event = {
             "type": "event",
@@ -40,8 +43,8 @@ async def test_motion_detection_workflow(mock_config):
         # Wait a bit for async processing
         await asyncio.sleep(0.1)
 
-        # Verify webhook was sent
-        assert mock_webhook.call_count >= 1
+        # Verify webhook was sent (CLOSED → OPEN triggers webhook)
+        assert mock_webhook.call_count == 1
 
         # Verify camera state was updated to open
         camera = await orchestrator.camera_registry.get_camera("T8150P40241800E7")
@@ -130,6 +133,10 @@ async def test_multiple_devices_simultaneously(mock_config):
         await orchestrator.start()
         await asyncio.sleep(0.1)
 
+        # Set cameras to closed state first (cameras may start as open in cameras.txt)
+        await orchestrator.camera_registry.set_state("T8150P40241800E7", "closed")
+        await orchestrator.camera_registry.set_state("T8B005112336016A", "closed")
+
         # Motion from device 1 (use actual cameras from registry)
         motion_event1 = {
             "type": "event",
@@ -159,8 +166,9 @@ async def test_multiple_devices_simultaneously(mock_config):
         assert camera1.state == "open"
         assert camera2.state == "open"
 
-        # Verify webhooks sent for both
-        assert mock_webhook.call_count >= 2
+        # Verify webhooks sent for both (CLOSED → OPEN transitions only)
+        # Each camera was set to closed, so each motion triggers one webhook
+        assert mock_webhook.call_count == 2
 
         # Stop orchestrator
         orchestrator.websocket_client.disconnect = AsyncMock()
@@ -187,6 +195,9 @@ async def test_error_recovery(mock_config):
         await orchestrator.start()
         await asyncio.sleep(0.1)
 
+        # Set camera to closed state first (may start as open in cameras.txt)
+        await orchestrator.camera_registry.set_state("T8150P40241800E7", "closed")
+
         # Simulate event (use actual camera from registry)
         motion_event = {
             "type": "event",
@@ -200,7 +211,8 @@ async def test_error_recovery(mock_config):
         await asyncio.sleep(0.2)
 
         # Verify webhook was attempted (and failed as expected)
-        assert mock_webhook.call_count >= 1
+        # Camera was set to closed, so CLOSED → OPEN triggers 1 webhook attempt
+        assert mock_webhook.call_count == 1
 
         # System should still be running despite errors
         assert orchestrator._running is True

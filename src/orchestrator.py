@@ -76,15 +76,6 @@ class EventOrchestrator:
             battery_cooldown_hours=config.alerts.battery.cooldown_hours,
         )
 
-        # State timeout checker (auto-close after 1hr)
-        self.state_timeout_checker = StateTimeoutChecker(
-            camera_registry=self.camera_registry,
-            workato_webhook=self.workato_webhook,
-            error_logger=self.error_logger,
-            timeout_minutes=config.motion.state_timeout_minutes,
-            check_interval_seconds=60,
-        )
-
         # Initialize motion handler
         logger.info("Initializing motion handler...")
 
@@ -92,6 +83,16 @@ class EventOrchestrator:
             camera_registry=self.camera_registry,
             workato_webhook=self.workato_webhook,
             error_logger=self.error_logger,
+        )
+
+        # State timeout checker (auto-close after 1hr)
+        self.state_timeout_checker = StateTimeoutChecker(
+            camera_registry=self.camera_registry,
+            workato_webhook=self.workato_webhook,
+            error_logger=self.error_logger,
+            motion_handler=self.motion_handler,
+            timeout_minutes=config.motion.state_timeout_minutes,
+            check_interval_seconds=60,
         )
 
         logger.info("✅ All services and handlers initialized")
