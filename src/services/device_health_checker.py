@@ -201,32 +201,11 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Standalone cameras: use snooze command to test if camera is alive
-                # Only online cameras will respond to snooze
-                logger.debug(f"🔌 Testing connection for standalone camera {device_sn} via snooze command...")
+                # Standalone cameras: use longer timeout to detect offline state
+                # When offline, P2P connection attempt will timeout (~20s based on eufy-ws-webapp logs)
+                # When online, response is immediate from cache
+                logger.debug(f"🔌 Checking standalone camera {device_sn} with extended timeout...")
 
-                snooze_response = await self.websocket_client.send_command(
-                    "device.snooze",
-                    {
-                        "serialNumber": device_sn,
-                        "value": 5,  # 5 minute snooze
-                        "snoozeTime": 0,
-                        "snoozeHomebase": False,
-                        "snoozeMotion": True,
-                        "snoozeChime": False
-                    },
-                    wait_response=True,
-                    timeout=30.0  # Allow time for P2P connection attempt
-                )
-
-                # If snooze failed, camera is offline
-                if not snooze_response or not snooze_response.get("success"):
-                    error_code = snooze_response.get("errorCode") if snooze_response else "no_response"
-                    logger.warning(f"📴 Snooze command failed for {device_sn}: {error_code}")
-                    await self._handle_failure(device_sn, slack_channel, error_code)
-                    return
-
-                # Snooze successful - camera is online, now get battery level
                 response = await self.websocket_client.send_command(
                     "device.get_properties",
                     {
@@ -234,7 +213,7 @@ class DeviceHealthChecker:
                         "properties": ["battery"]
                     },
                     wait_response=True,
-                    timeout=10.0
+                    timeout=25.0  # Long enough to catch P2P timeout (~20s) but not too long
                 )
 
                 if response and response.get("success"):
