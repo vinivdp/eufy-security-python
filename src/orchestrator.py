@@ -10,7 +10,6 @@ from .services.error_logger import ErrorLogger
 from .services.device_health_checker import DeviceHealthChecker
 from .services.camera_registry import CameraRegistry
 from .services.state_timeout_checker import StateTimeoutChecker
-from .services.connection_tracker import ConnectionTracker
 from .handlers.motion_handler import MotionAlarmHandler
 from .utils.config import AppConfig
 
@@ -65,19 +64,12 @@ class EventOrchestrator:
         # Camera registry
         self.camera_registry = CameraRegistry(registry_path="config/cameras.txt")
 
-        # Connection tracker (real-time P2P connection state via WebSocket)
-        self.connection_tracker = ConnectionTracker()
-
-        # Wire connection tracker to WebSocket client
-        self.websocket_client.connection_tracker = self.connection_tracker
-
         # Health checker (polling-based)
         self.health_checker = DeviceHealthChecker(
             websocket_client=self.websocket_client,
             camera_registry=self.camera_registry,
             workato_webhook=self.workato_webhook,
             error_logger=self.error_logger,
-            connection_tracker=self.connection_tracker,
             polling_interval_minutes=config.alerts.offline.polling_interval_minutes,
             failure_threshold=config.alerts.offline.failure_threshold,
             battery_threshold_percent=config.alerts.offline.battery_threshold_percent,

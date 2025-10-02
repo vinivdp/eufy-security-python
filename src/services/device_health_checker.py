@@ -14,7 +14,6 @@ from ..services.error_logger import ErrorLogger
 
 if TYPE_CHECKING:
     from ..clients.websocket_client import WebSocketClient
-    from ..services.connection_tracker import ConnectionTracker
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,6 @@ class DeviceHealthChecker:
         camera_registry: CameraRegistry,
         workato_webhook: WorkatoWebhook,
         error_logger: ErrorLogger,
-        connection_tracker: "ConnectionTracker",
         polling_interval_minutes: int = 5,
         failure_threshold: int = 3,
         battery_threshold_percent: int = 30,
@@ -51,7 +49,6 @@ class DeviceHealthChecker:
             camera_registry: CameraRegistry instance
             workato_webhook: WorkatoWebhook instance
             error_logger: ErrorLogger instance
-            connection_tracker: ConnectionTracker instance for real-time connection state
             polling_interval_minutes: Minutes between health checks
             failure_threshold: Number of failures before marking offline
             battery_threshold_percent: Battery % threshold for alert
@@ -61,7 +58,6 @@ class DeviceHealthChecker:
         self.camera_registry = camera_registry
         self.workato_webhook = workato_webhook
         self.error_logger = error_logger
-        self.connection_tracker = connection_tracker
         self.polling_interval_minutes = polling_interval_minutes
         self.failure_threshold = failure_threshold
         self.battery_threshold_percent = battery_threshold_percent
@@ -205,34 +201,38 @@ class DeviceHealthChecker:
             is_standalone = device_sn.startswith("T8B0") or device_sn.startswith("T8150")
 
             if is_standalone:
-                # Try to get device properties - this will fail if camera is actually offline
+                # Force P2P connection attempt (like eufy-ws-webapp does)
+                # This will timeout if the camera is actually offline, unlike device.get_properties which returns cached data
+                logger.debug(f"🔌 Forcing P2P connection to standalone camera {device_sn}...")
                 response = await self.websocket_client.send_command(
-                    "device.get_properties",
+                    "station.connect",
                     {
-                        "serialNumber": device_sn,
-                        "properties": ["battery", "state"]
+                        "serialNumber": device_sn
                     },
                     wait_response=True,
-                    timeout=10.0
+                    timeout=25.0  # eufy-ws-webapp uses ~20s timeout
                 )
 
                 if response and response.get("success"):
-                    # Got a response - but check if connection tracker says it's disconnected
-                    # (This handles the case where cached data returns success but camera is actually offline)
-                    disconnected_time = self.connection_tracker.get_disconnection_time(device_sn)
-                    if disconnected_time is not None:
-                        # We have explicit disconnect event - camera is offline
-                        logger.warning(f"📴 Station disconnected for {device_sn} (WebSocket event at {disconnected_time})")
-                        await self._handle_failure(device_sn, slack_channel, "station_disconnected")
-                        return
+                    # P2P connection successful - camera is online
+                    # Now get battery level
+                    logger.debug(f"✅ P2P connection successful for {device_sn}, fetching battery...")
+                    battery_response = await self.websocket_client.send_command(
+                        "device.get_properties",
+                        {
+                            "serialNumber": device_sn,
+                            "properties": ["battery"]
+                        },
+                        wait_response=True,
+                        timeout=10.0
+                    )
 
-                    # Device is online - check battery
                     logger.info(f"✅ Health check SUCCESS for {device_sn}")
-                    await self._handle_online_response(device_sn, slack_channel, response)
+                    await self._handle_online_response(device_sn, slack_channel, battery_response)
                 else:
-                    # Command failed - device is offline
-                    error_code = response.get("errorCode") if response else "no_response"
-                    logger.warning(f"📴 Health check failed for {device_sn}: {error_code}")
+                    # P2P connection failed or timed out - camera is offline
+                    error_code = response.get("errorCode") if response else "p2p_connection_timeout"
+                    logger.warning(f"📴 P2P connection failed for {device_sn}: {error_code}")
                     await self._handle_failure(device_sn, slack_channel, error_code)
 
             else:

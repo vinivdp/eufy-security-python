@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.services.device_health_checker import DeviceHealthChecker, OFFLINE_DEVICES_FILE
 from src.services.camera_registry import get_brasilia_now
-from src.services.connection_tracker import ConnectionTracker
 
 
 @pytest.fixture
@@ -42,15 +41,7 @@ def mock_error_logger():
 
 
 @pytest.fixture
-def mock_connection_tracker():
-    """Create a mock connection tracker"""
-    tracker = MagicMock(spec=ConnectionTracker)
-    tracker.is_connected = MagicMock(return_value=True)  # Default to connected
-    return tracker
-
-
-@pytest.fixture
-def health_checker(mock_websocket_client, mock_camera_registry, mock_workato_webhook, mock_error_logger, mock_connection_tracker):
+def health_checker(mock_websocket_client, mock_camera_registry, mock_workato_webhook, mock_error_logger):
     """Create a DeviceHealthChecker instance"""
     # Clean up any existing offline devices file
     if OFFLINE_DEVICES_FILE.exists():
@@ -61,7 +52,6 @@ def health_checker(mock_websocket_client, mock_camera_registry, mock_workato_web
         camera_registry=mock_camera_registry,
         workato_webhook=mock_workato_webhook,
         error_logger=mock_error_logger,
-        connection_tracker=mock_connection_tracker,
         polling_interval_minutes=5,
         failure_threshold=3,
         battery_threshold_percent=30,
@@ -104,7 +94,6 @@ def test_save_and_load_offline_devices(health_checker):
         camera_registry=MagicMock(),
         workato_webhook=MagicMock(),
         error_logger=MagicMock(),
-        connection_tracker=MagicMock(spec=ConnectionTracker),
     )
 
     # Should have loaded the devices
@@ -141,52 +130,48 @@ async def test_check_camera_health_success_regular_camera(health_checker, mock_w
 
 
 @pytest.mark.asyncio
-async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client, mock_connection_tracker):
+async def test_check_camera_health_success_standalone_camera(health_checker, mock_websocket_client):
     """Test successful health check for standalone camera (T8B0* or T8150*)"""
-    # Mock connection tracker - no disconnect event (device is online)
-    mock_connection_tracker.get_disconnection_time.return_value = None
-
-    # Mock device.get_properties for battery
-    mock_websocket_client.send_command.return_value = {
-        "type": "result",
-        "success": True,
-        "result": {
-            "properties": {
-                "battery": 85
+    # Mock station.connect successful response
+    mock_websocket_client.send_command.side_effect = [
+        # First call: station.connect succeeds
+        {
+            "type": "result",
+            "success": True
+        },
+        # Second call: device.get_properties for battery
+        {
+            "type": "result",
+            "success": True,
+            "result": {
+                "properties": {
+                    "battery": 85
+                }
             }
         }
-    }
+    ]
 
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
 
-    # Should have checked for disconnection after successful query
-    mock_connection_tracker.get_disconnection_time.assert_called_with("T8B00511242309F6")
+    # Should have called send_command twice (station.connect + device.get_properties)
+    assert mock_websocket_client.send_command.call_count == 2
 
-    # Should have called send_command once for device.get_properties
-    mock_websocket_client.send_command.assert_called_once()
-    call_args = mock_websocket_client.send_command.call_args
-    assert call_args[0][0] == "device.get_properties"
-    assert call_args[0][1]["serialNumber"] == "T8B00511242309F6"
+    # First call should be station.connect
+    first_call = mock_websocket_client.send_command.call_args_list[0]
+    assert first_call[0][0] == "station.connect"
+    assert first_call[0][1]["serialNumber"] == "T8B00511242309F6"
+
+    # Second call should be device.get_properties for battery
+    second_call = mock_websocket_client.send_command.call_args_list[1]
+    assert second_call[0][0] == "device.get_properties"
+    assert second_call[0][1]["serialNumber"] == "T8B00511242309F6"
 
 
 @pytest.mark.asyncio
-async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook, mock_connection_tracker):
-    """Test health check when standalone camera returns success but has disconnect event"""
-    from datetime import datetime
-
-    # Mock device.get_properties returning success (cached data)
-    mock_websocket_client.send_command.return_value = {
-        "type": "result",
-        "success": True,
-        "result": {
-            "properties": {
-                "battery": 100
-            }
-        }
-    }
-
-    # Mock connection tracker showing explicit disconnect event
-    mock_connection_tracker.get_disconnection_time.return_value = datetime.now()
+async def test_check_camera_health_standalone_camera_disconnected(health_checker, mock_websocket_client, mock_workato_webhook):
+    """Test health check when standalone camera P2P connection fails/times out"""
+    # Mock station.connect timeout (camera offline)
+    mock_websocket_client.send_command.return_value = None  # Timeout returns None
 
     # First two failures - should NOT send alert
     await health_checker._check_camera_health("T8B00511242309F6", "test-channel")
@@ -201,8 +186,13 @@ async def test_check_camera_health_standalone_camera_disconnected(health_checker
     assert "T8B00511242309F6" in health_checker.offline_devices_timestamps
     assert health_checker.failure_counts["T8B00511242309F6"] == 3
 
-    # Should have called send_command to query properties (which succeeded but was overridden by disconnect event)
+    # Should have called station.connect 3 times (one per health check)
     assert mock_websocket_client.send_command.call_count == 3
+
+    # All calls should be station.connect
+    for call in mock_websocket_client.send_command.call_args_list:
+        assert call[0][0] == "station.connect"
+        assert call[0][1]["serialNumber"] == "T8B00511242309F6"
 
 
 @pytest.mark.asyncio
